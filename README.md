@@ -3,7 +3,7 @@
 Local control for a WiFi-connected Vanpowers Power Station Pro 1500/2000 and Zendure SuperBase Pro 1500/2000 power stations, over
 its own TCP socket - no cloud account, no MQTT, no internet required.
 
-<img width="858" height="1154" alt="image" src="https://github.com/user-attachments/assets/99684f48-543b-4d75-9556-30526ed12eaf" />
+<img width="864" height="1221" alt="image" src="https://github.com/user-attachments/assets/8cff28e0-fac1-4402-9fad-740cf15cf67f" />
 
 ## Why
 
