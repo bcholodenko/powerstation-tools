@@ -11,12 +11,12 @@ frame on connect; client acks it, then sends '24'/'01' to enter control
 mode. Once acked, the device pushes status ('93') roughly every 3s for
 the life of the connection - see wait_for_status_push().
 
-Master/AC/DC/ambient-light switches use command '12' with a single byte
-carrying the full 8-bit switch state (bit7=acHz, bit6=lbs, bit5=four_g,
-bit4=ambient_light, bit3=buzzer, bit2=dc, bit1=ac, bit0=master) - only
-one bit changes per call, the rest are read from current status first.
-AmpUp/silent-input use command '20' the same way, on a separate 2-bit
-byte. Buzzer, sleep, AC Hz, charge speed/limit, LED, and standby timers
+Master/AC/DC/ambient-light/buzzer switches use command '12' with a
+single byte carrying the full 8-bit switch state (bit7=acHz, bit6=lbs,
+bit5=four_g, bit4=ambient_light, bit3=buzzer, bit2=dc, bit1=ac,
+bit0=master) - only one bit changes per call, the rest are read from
+current status first. AmpUp/silent-input use command '20' the same
+way, on a separate 2-bit byte. Sleep, AC Hz, charge speed/limit, LED,
 each have their own single-purpose command word.
 
 Usage examples (run from this directory):
@@ -24,7 +24,7 @@ Usage examples (run from this directory):
     python3 powerstation_control.py --ac-output on
     python3 powerstation_control.py --dc-output off
     python3 powerstation_control.py --master-switch on
-    python3 powerstation_control.py --buzzer off
+    python3 powerstation_control.py --beep off
     python3 powerstation_control.py --sleep-mode enable
     python3 powerstation_control.py --amp-up on
     python3 powerstation_control.py --charge-limit 90
@@ -227,8 +227,14 @@ def parse_status_93_payload(data: str) -> dict:
       hex[38:40] switch bitmask: bit7=acHz, bit6=lbs, bit5=four_g,
                  bit4=ambient_light, bit3=buzzer, bit2=dc, bit1=ac,
                  bit0=master
-      hex[40:42] bit0=ampUp (confirmed), bit1=sleep mode
-      hex[42:46] unknown
+      hex[40:42] bit0=ampUp (confirmed), bit1=sleep mode, bits7-5=
+                 charge speed level (1-5, see set_max_charge_watts) -
+                 bits4-3 unknown, preserved on writes
+      hex[42:46] temperature, raw ADC count: celsius = (raw - 2731) / 10
+                 (same formula as the long-form parser's temperature
+                 field) - every captured sample decodes to a plausible
+                 25-31°C, not yet independently confirmed against a
+                 real thermometer
 
     0xFFFF in the remaining-time fields means no active value.
     """
@@ -247,7 +253,13 @@ def parse_status_93_payload(data: str) -> dict:
     sw_bits = bits8(38)
     switches = None
     if sw_bits is not None:
-        names = ["ac_hz", "lbs", "four_g", "ambient_light", "buzzer", "dc", "ac", "master"]
+        # Bit order verified by walking the parser bytecode directly
+        # (substring extraction -> iput-boolean field -> setXxx call):
+        # MSB(index0)=ac_hz ... LSB(index7)=master. Positions 1 and 2
+        # are written here but not exposed by any switch in the vendor
+        # UI - real and preserved on writes, just unlabeled.
+        names = ["ac_hz", "unknown_bit1", "unknown_bit2", "ambient_light",
+                 "buzzer", "dc", "ac", "master"]
         switches = {name: bit == "1" for name, bit in zip(names, sw_bits)}
 
     amp_byte = h(40, 42)
@@ -267,6 +279,21 @@ def parse_status_93_payload(data: str) -> dict:
     remaining_output = no_sentinel(h(2, 6))
     remaining_input = no_sentinel(h(6, 10))
 
+    # ambient_color is only the LOWER 5 BITS of hex[34:36], not the
+    # full byte - confirmed from source (the top 3 bits are extracted
+    # but discarded/unused). Masking only matters for raw byte values
+    # >=32; every sample seen so far has been small enough that this
+    # was a no-op, but it's the technically correct extraction.
+    ambient_color_raw = h(34, 36)
+    ambient_color = (ambient_color_raw & 0x1F) if ambient_color_raw is not None else None
+
+    # Temperature: same raw-ADC formula already confirmed for the
+    # long-form status parser. Every sample so far decodes to a
+    # plausible value (25-31°C) - not yet checked against a real
+    # thermometer.
+    temp_raw = h(42, 46)
+    temperature_c = round((temp_raw - 2731) / 10, 1) if temp_raw is not None else None
+
     result = {
         # CONFIRMED by direct experiment:
         "battery_percent":    h(0, 2),
@@ -276,10 +303,11 @@ def parse_status_93_payload(data: str) -> dict:
         "amp_up":             amp_up,
         # From source, not yet independently confirmed:
         "dc_input_watts":     h(14, 18),
-        "ambient_color":      h(34, 36),
+        "ambient_color":      ambient_color,
         "ambient_lightness":  h(36, 38),
         "sleep_mode":         sleep_mode,
         "switches":           switches,
+        "temperature_c":      temperature_c,
         "remaining_output_minutes": remaining_output,
         "remaining_input_minutes":  remaining_input,
         # Compatibility aliases for existing dashboard JS field names:
@@ -289,6 +317,10 @@ def parse_status_93_payload(data: str) -> dict:
         "device_mode": {
             "amp_up": amp_up,
             "sleep_mode": sleep_mode,
+        },
+        "led": {
+            "brightness": h(36, 38),
+            "color_id": ambient_color,
         },
         # Raw for debugging:
         "byte_count": len(byte_list),
@@ -308,7 +340,7 @@ def parse_status_payload(data: str) -> dict:
     result = {}
 
     result["electricity_pct"] = num(0, 2)
-    result["discharge_time"] = num(2, 4)   # unit not confirmed, app shows as remaining time
+    result["discharge_time"] = num(2, 4)   # unit not confirmed, shown as remaining time
     result["charge_time"] = num(6, 4)
     result["ac_input_watts"] = num(10, 4)
     result["dc_input_watts"] = num(14, 4)
@@ -457,6 +489,11 @@ class PowerstationClient:
         # imei/iccid/device_id from the handshake, merged into every
         # wait_for_status_push() result.
         self._cached_device_info = None
+        # (data, timestamp) for the freshest '93' seen, e.g. one that
+        # arrived mid-handshake - lets wait_for_status_push() use it
+        # immediately instead of waiting for a brand new push and
+        # risking an unlucky gap in the device's ~3s schedule.
+        self._cached_status = None
         # Buffer for partial/unsolicited frames (e.g. an unprompted '61'
         # announcement) so nothing is lost between reads.
         self._recv_buffer = b""
@@ -488,6 +525,7 @@ class PowerstationClient:
         self.connected = False
         self.handshake_done = False
         self._cached_device_info = None
+        self._cached_status = None
         self._recv_buffer = b""
         self._log("disconnected")
 
@@ -556,6 +594,21 @@ class PowerstationClient:
                         self._send_frame("61", "55")
                     except Exception as e:
                         self._log(f"   failed to ack '61': {e}")
+                    if self.handshake_done:
+                        self._log("   this '61' arrived mid-session, after control mode was "
+                                  "already established - the device's session has reset "
+                                  "internally. Resending '24'/'01' to recover, rather than "
+                                  "waiting forever for status the device won't send again "
+                                  "until that happens.")
+                        self.handshake_done = False
+                        try:
+                            self._send_frame("24", "01")
+                        except Exception as e:
+                            self._log(f"   failed to resend '24': {e}")
+                elif cmd == "24" and data == "55" and not self.handshake_done:
+                    self._log("   '24' ack received during mid-session recovery - control mode "
+                              "re-established, resuming the original wait")
+                    self.handshake_done = True
                 elif cmd == "83":
                     self._log("   '83' means the device wants WiFi credentials - "
                                "use provision_wifi() for that.")
@@ -599,7 +652,23 @@ class PowerstationClient:
             raise PowerstationError("Not connected")
 
         if not self.handshake_done and command_word not in ("61", "24"):
-            self.quick_connect(timeout=15.0)
+            try:
+                result = self.quick_connect(timeout=15.0)
+            except PowerstationError:
+                self.disconnect()
+                raise
+            if not result.get("success"):
+                # The device only sends '61' once per TCP session - a
+                # failed handshake on this socket means it never will
+                # again. Disconnect so the next attempt opens a truly
+                # fresh connection instead of retrying forever on a
+                # socket the device has already moved past.
+                self.disconnect()
+                raise PowerstationError(
+                    "Handshake failed - refusing to send the actual command on an "
+                    "unverified connection. The device never acked '24', so it may "
+                    "not be in control mode."
+                )
 
         if expected_cmds is None:
             expected_cmds = {command_word}
@@ -642,9 +711,14 @@ class PowerstationClient:
         Returns {'handshake': quick_connect's result dict,
                  'frames': [(elapsed_seconds, command_word, data), ...]}
         """
-        handshake_result = self.quick_connect(timeout=15.0)
+        try:
+            handshake_result = self.quick_connect(timeout=15.0)
+        except PowerstationError:
+            self.disconnect()
+            raise
         frames = []
         if not handshake_result.get("success"):
+            self.disconnect()
             return {"handshake": handshake_result, "frames": frames}
 
         start = time.time()
@@ -726,21 +800,48 @@ class PowerstationClient:
             return parsed
         return {"command_word": command_word, "ack": parse_ack(data), "raw": raw}
 
-    def wait_for_status_push(self, timeout: float = 5.0) -> dict:
+    def wait_for_status_push(self, timeout: float = 5.0, max_cache_age: float = 4.0) -> dict:
         """
         Wait for the device's next unsolicited '93' status push (sent
         roughly every 3s once connected - '34' itself triggers nothing).
         Runs the handshake first if needed, and merges in cached
         device_info (imei/iccid/device_id) from it.
+
+        If a '93' arrived recently (e.g. during the handshake itself)
+        and is no older than max_cache_age seconds, uses that instead
+        of blocking for a brand new one - avoids discarding good data
+        and risking an unlucky gap in the device's own schedule.
         """
         if not self.handshake_done:
-            result = self.quick_connect(timeout=15.0)
+            try:
+                result = self.quick_connect(timeout=15.0)
+            except PowerstationError:
+                self.disconnect()
+                raise
             if not result.get("success"):
+                # See send_command's comment: the device only sends '61'
+                # once per TCP session, so a stuck socket here would
+                # otherwise retry forever with no '61' ever arriving
+                # again. Disconnect so the bridge's next poll opens a
+                # genuinely fresh connection instead of looping on a
+                # dead one.
+                self.disconnect()
                 raise PowerstationError("quick_connect handshake failed - can't get status without it")
             self._cached_device_info = {
                 k: v for k, v in result.items()
                 if k in ("device_id", "imei", "msisdn", "iccid") and v
             }
+
+        if self._cached_status is not None:
+            data, ts = self._cached_status
+            self._cached_status = None
+            if time.time() - ts <= max_cache_age:
+                parsed = parse_status_93_payload(data)
+                parsed["command_word"] = "93"
+                parsed["data_hex"] = data
+                if self._cached_device_info:
+                    parsed["device_info"] = dict(self._cached_device_info)
+                return parsed
 
         raw = self._read_frame(expected_cmds={"93"}, timeout=timeout)
         if not raw:
@@ -758,14 +859,16 @@ class PowerstationClient:
         return parsed
 
     # ---------- Switch controls ----------
-    # master/AC/DC/ambient-light use the bitmask command '12', not the
-    # documented single-purpose commands ('48'/'50'/'52'/'56'), which
-    # are gated behind a firmware flag this device doesn't set.
+    # master/AC/DC/ambient-light/buzzer use the bitmask command '12',
+    # not the documented single-purpose commands ('48'/'50'/'52'/'56'/
+    # '54'), which are gated behind a firmware flag this device doesn't
+    # set.
 
     def _set_switch(self, command_word: str, on: bool):
-        """Single-purpose on/off command, used by switches without a
-        confirmed bitmask path (sleep, AC Hz, 4G)."""
-        self.send_command(command_word, "00" if on else "01", timeout=2.0)
+        """Single-purpose on/off command for switches with no confirmed
+        bitmask path. Fire-and-forget: only '93' responses are read
+        back."""
+        self.send_command(command_word, "00" if on else "01", timeout=0)
 
     def set_master_switch(self, on: bool):
         """Master power switch on/off, via the '12' bitmask."""
@@ -784,18 +887,26 @@ class PowerstationClient:
         return self.toggle_switch_via_legacy_bitmask("ambient_light", on)
 
     def set_buzzer(self, on: bool):
-        """Buzzer on/off (command '54'). Note: '01'=on, '00'=off - the
-        reverse of the convention used by other switches."""
-        self.send_command("54", "01" if on else "00", timeout=2.0)
+        """Buzzer/beep on/off, via the '12' bitmask. Standalone command
+        '54' ('01'=on/'00'=off) is the newer-firmware-only path -
+        confirmed from source it's gated behind the same firmware flag
+        as the master/AC/DC/ambient-light single-purpose commands, so
+        it doesn't work on this device either."""
+        return self.toggle_switch_via_legacy_bitmask("buzzer", on)
 
     def set_ac_frequency(self, hz: int):
-        """AC output frequency, 50 or 60 Hz (command '62')."""
+        """AC output frequency, 50 or 60 Hz (command '62'). Fire-and-
+        forget: no response to this command is read or expected."""
         if hz not in (50, 60):
             raise ValueError("hz must be 50 or 60")
-        self.send_command("62", "00" if hz == 60 else "01", timeout=2.0)
+        self.send_command("62", "00" if hz == 60 else "01", timeout=0)
 
     def set_four_g_switch(self, on: bool):
-        """4G/LTE radio on/off (command '58'); not independently confirmed."""
+        """4G/LTE radio on/off. Command '58' has no supporting evidence
+        in source - no dispatcher case sends it, and the SIM card
+        management UI is hidden entirely in local/P2P mode, suggesting
+        4G control is cloud-only. Almost certainly not functional
+        locally."""
         self._set_switch("58", on)
 
     def set_amp_up_mode(self, on: bool):
@@ -823,10 +934,11 @@ class PowerstationClient:
 
     def set_machine_standby_minutes(self, level: int):
         """Auto power-off-when-idle timeout (command '64').
-        6=never, 5=12h, 4=6h, 3=2h, 2=1h, 1=shortest."""
+        6=never, 5=12h, 4=6h, 3=2h, 2=1h, 1=shortest. Fire-and-forget:
+        no response is read back."""
         if not 1 <= level <= 6:
             raise ValueError("Standby level must be 1-6 (6 = never)")
-        self.send_command("64", format(level, '02X'), timeout=2.0)
+        self.send_command("64", format(level, '02X'), timeout=0)
 
     def set_keep_powered_on(self, enabled: bool, off_level: int = 1):
         """Convenience wrapper: True sets standby to "never" (level 6),
@@ -835,14 +947,18 @@ class PowerstationClient:
 
     def set_screen_standby_minutes(self, level: int):
         """Screen/display backlight standby timeout (command '66'),
-        separate from the whole-unit timeout above. Not independently
-        confirmed against hardware."""
+        separate from the whole-unit timeout above. Levels confirmed
+        from source: 1=10sec, 2=30sec, 3=1min, 4=5min, 5=30min, 6=never -
+        note these are NOT the same durations as machine standby above,
+        despite using the same 1-6 level encoding. Fire-and-forget: no
+        response is read back."""
         if not 1 <= level <= 6:
-            raise ValueError("Standby level must be 1-6 (assumed range, unconfirmed)")
-        self.send_command("66", format(level, '02X'), timeout=2.0)
+            raise ValueError("Standby level must be 1-6 (6 = never)")
+        self.send_command("66", format(level, '02X'), timeout=0)
 
-    # Bit order for the legacy 8-bit switch bitmask, MSB to LSB.
-    LEGACY_BITMASK_POSITIONS = ["ac_hz", "lbs", "four_g", "ambient_light",
+    # Bit order for the legacy 8-bit switch bitmask, MSB to LSB -
+    # verified by walking the status parser's bytecode directly.
+    LEGACY_BITMASK_POSITIONS = ["ac_hz", "unknown_bit1", "unknown_bit2", "ambient_light",
                                  "buzzer", "dc", "ac", "master"]
 
     def toggle_switch_via_legacy_bitmask(self, switch_name: str, turn_on: bool) -> dict:
@@ -851,6 +967,16 @@ class PowerstationClient:
         8-bit switch state in a single byte. Reads fresh status first
         and changes only the targeted bit, leaving the other 7 as
         reported.
+
+        Confirmed from source: the AC and DC switches on the main
+        device screen are themselves gated behind cloud-reported
+        "online" status (same MQTT flag that gates beep/standby
+        elsewhere) - a device that's never completed cloud binding,
+        like ours, couldn't flip these switches through the vendor
+        client's UI at all. This client bypasses that UI-layer gate by
+        sending the protocol command directly - confirmed working by
+        direct testing - but this exact code path has likely never
+        been exercised by anyone in this specific situation.
         """
         if switch_name not in self.LEGACY_BITMASK_POSITIONS:
             raise ValueError(f"switch_name must be one of {self.LEGACY_BITMASK_POSITIONS}")
@@ -878,54 +1004,99 @@ class PowerstationClient:
                 "status_before": status}
 
     def set_max_charge_watts(self, watts: int):
-        """Maximum AC charge speed in watts, via command '72'.
-        One of: 300, 500, 800, 1200, 1800."""
+        """
+        Maximum AC charge speed, via command '20' - the same byte that
+        carries AmpUp/sleep mode (bits 7-5 = level 1-5, rest preserved).
+        Confirmed from source: newer firmware takes a dedicated command
+        '72' with the level as data; this device's older firmware
+        instead packs the level into that shared byte, same as
+        set_amp_up_mode()/set_sleep_mode() - '72' alone is a no-op here.
+
+        One of: 300, 500, 800, 1200, 1800 watts.
+
+        Blocked while sleep mode is on, matching the vendor client's
+        own behavior.
+        """
         level_map = {300: 1, 500: 2, 800: 3, 1200: 4, 1800: 5}
         if watts not in level_map:
             raise ValueError("Max charge watts must be one of 300, 500, 800, 1200, 1800")
-        self.send_command("72", format(level_map[watts], '02X'), timeout=2.0)
+        level = level_map[watts]
+        status = self.wait_for_status_push(timeout=8.0)
+        if status.get("sleep_mode"):
+            raise PowerstationError(
+                "Can't change charge speed while sleep mode is on - this matches "
+                "the vendor client's own behavior, which blocks this change in "
+                "that state. Turn off sleep mode first."
+            )
+        data_hex = status.get("data_hex", "")
+        current_byte = int(data_hex[40:42], 16) if len(data_hex) >= 42 else 0
+        new_byte = (current_byte & 0x1F) | (level << 5)
+        self.send_command("20", format(new_byte, '02X'), timeout=2.0)
 
     def set_charge_limit(self, percent: int):
         """
         Battery charge limit percentage (command '18'): 100, 90, 80, or
-        70. Encoding: percentage as binary, left-padded to 4 bits, with
-        literal suffix '0001' appended, converted to hex (e.g. 100% =
-        '0641').
+        70.
+
+        Encoding confirmed against the decompiled vendor bundle's
+        charge-level setter: the packed field is a LEVEL INDEX (1=100%,
+        2=90%, 3=80%, 4=70%), not the literal percentage, and is
+        identical on both old and new firmware. Fire-and-forget: no
+        response is read back.
         """
-        if percent not in (100, 90, 80, 70):
+        level_map = {100: 1, 90: 2, 80: 3, 70: 4}
+        if percent not in level_map:
             raise ValueError("Charge limit must be one of 100, 90, 80, 70")
-        binary_str = format(percent, 'b')
+        level = level_map[percent]
+        binary_str = format(level, 'b')
         if len(binary_str) < 4:
-            binary_str = "0" + binary_str
+            binary_str = "0" * (4 - len(binary_str)) + binary_str
         combined = binary_str + "0001"
         int_value = int(combined, 2)
         hex_str = format(int_value, 'X')
         if len(hex_str) % 2 == 1:
             hex_str = "0" + hex_str
-        self.send_command("18", hex_str, timeout=2.0)
+        self.send_command("18", hex_str, timeout=0)
 
     # ---------- LED controls ----------
 
     def set_led_brightness(self, brightness: int):
-        """Set LED brightness (0-100%)."""
+        """Set LED brightness (0-100%). This firmware requires the
+        combined '22' command (brightness alone via '74' is a
+        new-firmware-only path that doesn't work on this device) -
+        reads current ambient_color from status first so it's
+        preserved."""
         if not 0 <= brightness <= 100:
             raise ValueError("Brightness must be between 0 and 100")
-        self.send_command("74", format(brightness, '02X'), timeout=2.0)
+        status = self.wait_for_status_push(timeout=8.0)
+        current_color = status.get("ambient_color") or 1
+        self.set_led_color_and_brightness(current_color, brightness)
 
     def set_led_color(self, color_id: int):
         """Set LED color using predefined IDs (1-10):
         1 white, 2 pink, 3 purple, 4 blue, 5 light blue, 6 cyan,
-        7 brand/orange, 8 yellow-green, 9 orange, 10 red."""
+        7 brand/orange, 8 yellow-green, 9 orange, 10 red.
+        Same as set_led_brightness: requires the combined '22' command
+        on this firmware, preserving current brightness from status."""
         if not 1 <= color_id <= 10:
             raise ValueError("Color ID must be between 1 and 10")
-        self.send_command("76", format(color_id, '02X'), timeout=2.0)
+        status = self.wait_for_status_push(timeout=8.0)
+        current_brightness = status.get("ambient_lightness") or 0
+        self.set_led_color_and_brightness(color_id, current_brightness)
 
     def set_led_color_and_brightness(self, color_id: int, brightness: int):
         """
         Set LED color and brightness together in one command ('22'),
         as an alternative to set_led_color()/set_led_brightness() via
-        '76'/'74'. 16-bit value = '001' prefix + 5-bit color_id +
+        '76'/'74'. 16-bit value = 3-bit mode type + 5-bit color_id +
         8-bit brightness, packed and sent as 4 hex chars.
+
+        Mode type must be '111' (static/manual), matching the
+        decompiled encoder - confirmed against source. An earlier
+        version of this method used '001', which puts the LED in the
+        wrong mode and produces a bogus reported brightness (e.g. 100
+        sent, 188 read back), rather than just changing unused status
+        bits.
         """
         if not 1 <= color_id <= 10:
             raise ValueError("Color ID must be between 1 and 10")
@@ -933,12 +1104,12 @@ class PowerstationClient:
             raise ValueError("Brightness must be between 0 and 100")
         color_bin = format(color_id, '05b')
         brightness_bin = format(brightness, '08b')
-        full_bin = "001" + color_bin + brightness_bin
+        full_bin = "111" + color_bin + brightness_bin
         int_value = int(full_bin, 2)
         hex_str = format(int_value, 'X')
         if len(hex_str) % 2 == 1:
             hex_str = "0" + hex_str
-        self.send_command("22", hex_str, timeout=2.0)
+        self.send_command("22", hex_str, timeout=0)
 
     # ---------- Undocumented commands, found by probing ----------
 
@@ -951,6 +1122,25 @@ class PowerstationClient:
         """Power off the unit (command '12', data '00'). Requires the
         physical power button to turn back on."""
         self.send_command("12", "00", timeout=2.0)
+
+    def trigger_ota_light(self):
+        """
+        Command '36', data '00'. Found by blind probing - NOT present
+        in source, meaning it isn't something the vendor client ever
+        sends. Triggers the OTA (firmware update) indicator light
+        flashing, with no ack. A related command ('40') has also
+        triggered the AC light and OTA light flashing together,
+        possibly OTA-adjacent or revealing lingering state from this
+        one.
+
+        Genuinely unverified: we don't know what this does at the
+        protocol level beyond the visible light effect. Since it falls
+        outside any documented command space, there's no way to
+        cross-check its real meaning or side effects against source.
+        An interrupted/unexpected firmware-update-adjacent state could
+        plausibly damage the unit in a way a simple restart won't fix.
+        """
+        self.send_command("36", "00", timeout=2.0)
 
     # ---------- WiFi provisioning ----------
     # Run this while connected to the device's own hotspot (192.168.4.1),
@@ -975,8 +1165,8 @@ class PowerstationClient:
         connect() while on the device's own hotspot.
 
         on_progress, if given, is called as on_progress(percent, message)
-        as the handshake advances (matches the app's own progress bar:
-        20/40/60/80/100).
+        as the handshake advances (matches the vendor client's progress
+        bar: 20/40/60/80/100).
 
         Returns a dict with any device info announced during the
         handshake (device_id/imei/msisdn/iccid) plus success=True.
@@ -1132,16 +1322,16 @@ class PowerstationClient:
                     self._send_frame("24", "01")
 
                 elif cmd == "24":
-                    self._log("quick-connect: device acked '24' - this is what the app itself "
-                              "treats as 'ready for control', with no SSID/password ever sent")
+                    self._log("quick-connect: device acked '24' - this is treated as "
+                              "'ready for control', with no SSID/password ever sent")
                     device_info["success"] = True
                     self.handshake_done = True
                     return device_info
 
                 elif cmd == "93":
-                    self._log("   '93' is an unsolicited status push arriving mid-handshake - "
-                              "noted but not acted on here, left for a later request_status() "
-                              "call to pick up properly")
+                    self._cached_status = (data, time.time())
+                    self._log("   '93' arrived mid-handshake - cached for the next "
+                              "wait_for_status_push() call instead of discarding it")
 
                 continue  # keep draining any further complete frames already buffered
 
@@ -1220,10 +1410,10 @@ def main():
     parser.add_argument("--ac-output", choices=["on", "off"], help="AC output on/off")
     parser.add_argument("--legacy-toggle", nargs=2, metavar=("SWITCH", "STATE"),
                          help="Toggle a switch via the bitmask command ('12'). SWITCH is one of "
-                              "ac_hz,lbs,four_g,ambient_light,buzzer,dc,ac,master. STATE is on/off. "
-                              "Example: --legacy-toggle ac on")
+                              "ac_hz,unknown_bit1,unknown_bit2,ambient_light,buzzer,dc,ac,master. "
+                              "STATE is on/off. Example: --legacy-toggle ac on")
     parser.add_argument("--dc-output", choices=["on", "off"], help="DC outputs on/off")
-    parser.add_argument("--buzzer", choices=["on", "off"], help="Buzzer on/off")
+    parser.add_argument("--beep", choices=["on", "off"], help="Beep on/off")
     parser.add_argument("--ambient-light", choices=["on", "off"], help="Ambient light strip on/off")
     parser.add_argument("--sleep-mode", choices=["enable", "disable"], help="Enable/disable sleep mode")
     parser.add_argument("--amp-up", choices=["on", "off"], help="AmpUp mode on/off")
@@ -1233,6 +1423,10 @@ def main():
     parser.add_argument("--local-power-off", action="store_true",
                          help="Power off the unit via command '12'. Requires the physical "
                               "power button to turn back on.")
+    parser.add_argument("--trigger-ota-light", action="store_true",
+                         help="EXPERIMENTAL/RISKY: command '36', found by blind probing, not "
+                              "in source. Triggers the OTA indicator light. Unknown "
+                              "real effect - could plausibly leave the unit in a bad state.")
     parser.add_argument("--screen-standby", type=int, metavar="LEVEL",
                          help="Screen backlight standby level (command '66'), 1-6.")
     parser.add_argument("--listen", type=float, metavar="SECONDS",
@@ -1367,9 +1561,9 @@ def main():
             print(f"\nSetting DC outputs {args.dc_output.upper()}...")
             client.set_dc_output(args.dc_output == "on")
 
-        if args.buzzer in ("on", "off"):
-            print(f"\nSetting buzzer {args.buzzer.upper()}...")
-            client.set_buzzer(args.buzzer == "on")
+        if args.beep in ("on", "off"):
+            print(f"\nSetting beep {args.beep.upper()}...")
+            client.set_buzzer(args.beep == "on")
 
         if args.ambient_light in ("on", "off"):
             print(f"\nSetting ambient light {args.ambient_light.upper()}...")
@@ -1399,6 +1593,18 @@ def main():
             if confirm == "yes":
                 print("Powering off...")
                 client.trigger_power_off()
+            else:
+                print("Cancelled.")
+
+        if args.trigger_ota_light:
+            confirm = input("\nThis sends an UNDOCUMENTED command found by blind probing, not "
+                             "anything the vendor client ever sends. It triggers the OTA (firmware "
+                             "update) indicator light. We don't know what this actually does at "
+                             "the protocol level - it could plausibly leave the unit in a bad "
+                             "state that a restart won't fix. Type 'yes' to proceed: ").strip().lower()
+            if confirm == "yes":
+                print("Sending...")
+                client.trigger_ota_light()
             else:
                 print("Cancelled.")
 
