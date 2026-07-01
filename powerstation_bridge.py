@@ -49,11 +49,9 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 
     def handle_error(self, request, client_address):
         """
-        Don't print a scary traceback for a client that simply closed the
-        connection before we finished responding (e.g. the browser tab
-        was reloaded/closed while a slow device-connect attempt was still
-        in progress). That's normal and harmless. Anything else still
-        gets the full traceback, since that could be a real bug.
+        Skip the traceback for a client that closed the connection
+        before we finished responding (e.g. tab reloaded mid-request) -
+        that's normal. Anything else still gets a full traceback.
         """
         exc_type = sys.exc_info()[0]
         if exc_type in (BrokenPipeError, ConnectionResetError):
@@ -208,14 +206,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
     def handle_wifi_provision(self, body):
         """
-        Run the Wi-Fi provisioning handshake. Uses its own connection
-        (provisioning only works while on the device's own hotspot,
-        192.168.4.1 - a different network context than normal control),
-        but coordinates with the shared client lock and explicitly drops
-        the shared connection first. The device's embedded TCP listener
-        very likely can't service two simultaneous connections cleanly -
-        running this concurrently with normal status polling is a good
-        way to get both connections stuck with no response to either.
+        Run the Wi-Fi provisioning handshake on its own connection
+        (only works on the device's own hotspot, 192.168.4.1 - a
+        different context than normal control). Drops the shared
+        connection first: the device's TCP listener can't service two
+        connections at once, and running this alongside status polling
+        gets both stuck with no response.
         """
         ssid = (body.get("ssid") or "").strip()
         password = body.get("password") or ""
@@ -227,13 +223,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
         with _client_lock:
             if _client is not None and _client.connected:
                 _client.disconnect()
-                # Give the device's embedded TCP stack a moment to fully
-                # tear down the old session before we open a new one. The
-                # one time we saw the dedicated provisioning connection
-                # get zero response at all (not even '61'), it followed
-                # immediately after disconnecting the shared client with
-                # no gap - this firmware may simply not be ready for a
-                # brand new connection that fast.
+                # Give the device's TCP stack a moment to tear down the
+                # old session before opening a new one - we've seen the
+                # provisioning connection get zero response when it
+                # follows a disconnect with no gap.
                 time.sleep(1.0)
 
             client = PowerstationClient(host="192.168.4.1", port=5000)
