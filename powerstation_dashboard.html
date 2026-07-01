@@ -244,7 +244,7 @@
     align-items:center;
     flex-wrap: wrap;
   }
-  .gauge{ position:relative; width:160px; height:160px; flex:none; }
+  .gauge{ position:relative; width:200px; height:200px; flex:none; }
   .gauge svg{ width:100%; height:100%; }
   .gauge .tick{ fill:none; stroke-width:5; stroke-linecap:round; transition: stroke .3s, filter .3s; }
   .gauge .readout{
@@ -343,7 +343,7 @@
     text-shadow: 0 0 8px rgba(255,255,255,0.4), 0 0 1px rgba(255,255,255,0.9);
     font-weight: 400;
   }
-  .device-panel .gauge .pct{ font-size: 34px; letter-spacing: 0.01em; }
+  .device-panel .gauge .pct{ font-size: 42px; letter-spacing: 0.01em; }
   .device-panel .gauge .pct .unit,
   .device-panel .ro .v .unit{
     font-family: var(--font-body);
@@ -360,30 +360,22 @@
   .device-panel .ro .v span[id]{ font-variant-numeric: tabular-nums; }
 
   /* "Much larger" per request - these are short, punchy numeric
-     readouts (AC/DC in/out, temperature), so they can go big without
-     crowding. Higher specificity than the base .ro .v so it wins
-     regardless of source order; the inline font-size on #remainTime
-     still overrides this locally, keeping that one modest. */
+     readouts (AC/DC in/out, temperature, recharging time), so they
+     can go big without crowding. Higher specificity than the base
+     .ro .v so it wins regardless of source order. */
   .device-hero .ro .v{ font-size: 30px; }
   .device-hero .ro .v .unit{ font-size: 18px; }
 
-  /* Mixed number+letter text in one node ("1200W") - the digit font
-     would render the "W" wrong, so keep it in the regular body face,
-     just bigger per request. */
-  .device-panel .ro .v#inputMode{
+  /* Small caption under the recharging-time/time-remaining number
+     ("HOURS"/"MINUTES"), same treatment as the .k labels but sitting
+     below the value instead of above it. */
+  .device-hero .ro .unit-below{
     font-family: var(--font-body);
-    color: rgba(255,255,255,0.9);
-    text-shadow: none;
-    font-size: 24px;
-  }
-
-  /* Full sentence ("1h 30m to full") - kept modest, not part of the
-     "much larger" numeric readouts. */
-  .device-panel .ro .v#remainTime{
-    font-family: var(--font-body);
-    color: rgba(255,255,255,0.85);
-    text-shadow: none;
-    font-size: 14px;
+    font-style: italic;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.45);
   }
 
 
@@ -685,7 +677,7 @@
         <div class="ro"><span class="k">AC in</span><span class="v" id="acIn">—<span class="unit">W</span></span></div>
         <div class="ro"><span class="k">AC out</span><span class="v" id="acOut">—<span class="unit">W</span></span></div>
         <div class="ro"><span class="k">Temperature</span><span class="v"><span id="tempValue">—</span><span class="unit" id="tempUnit" role="button" tabindex="0" title="Click to switch °C/°F" style="cursor:pointer; text-decoration:underline dotted;">°C</span></span></div>
-        <div class="ro" id="remainTimeRow" style="display:none"><span class="k" id="remainLabel">Time remaining</span><span class="v" id="remainTime" style="font-size:0.85em">—</span></div>
+        <div class="ro" id="remainTimeRow" style="display:none"><span class="k" id="remainLabel">Time remaining</span><span class="v" id="remainTime">—</span><span class="unit-below" id="remainTimeUnit"></span></div>
       </div>
       <div class="gauge">
         <svg viewBox="0 0 160 160">
@@ -698,7 +690,6 @@
       <div class="readouts readouts-right">
         <div class="ro"><span class="k">DC in</span><span class="v" id="dcIn">—<span class="unit">W</span></span></div>
         <div class="ro"><span class="k">DC out</span><span class="v" id="dcOut">—<span class="unit">W</span></span></div>
-        <div class="ro"><span class="k">Max charge speed</span><span class="v" id="inputMode">—</span></div>
       </div>
     </div>
     <div class="device-bottombar">
@@ -1069,6 +1060,15 @@ function setSwitch(id, on, isPending){
   }
 }
 
+// Splits a minutes count into a display value + unit word, matching
+// the device's own convention of showing hours as a decimal once the
+// duration passes an hour (e.g. 1.7 hours) rather than switching to
+// h/m combo text.
+function formatRemainTime(mins){
+  if (mins < 60) return { value: String(mins), unit: 'minutes' };
+  return { value: (mins / 60).toFixed(1), unit: 'hours' };
+}
+
 function renderStatus(s){
   if (typeof s.electricity_pct === 'number'){
     $('batteryPct').textContent = s.electricity_pct;
@@ -1130,19 +1130,23 @@ function renderStatus(s){
   const timeEl  = $('remainTime');
   const timeRow = $('remainTimeRow');
   const timeLabel = $('remainLabel');
-  if (timeEl && timeRow && timeLabel) {
+  const timeUnit = $('remainTimeUnit');
+  if (timeEl && timeRow && timeLabel && timeUnit) {
     if (typeof minsOut === 'number' && minsOut > 0) {
-      const h = Math.floor(minsOut / 60), m = minsOut % 60;
+      const f = formatRemainTime(minsOut);
       timeLabel.textContent = 'Time remaining';
-      timeEl.textContent = h > 0 ? `${h}h ${m}m remaining (output)` : `${m}m remaining (output)`;
+      timeEl.textContent = f.value;
+      timeUnit.textContent = f.unit;
       timeRow.style.display = '';
     } else if (typeof minsIn === 'number' && minsIn > 0) {
-      const h = Math.floor(minsIn / 60), m = minsIn % 60;
+      const f = formatRemainTime(minsIn);
       timeLabel.textContent = 'Recharging time';
-      timeEl.textContent = h > 0 ? `${h}h ${m}m to full` : `${m}m to full`;
+      timeEl.textContent = f.value;
+      timeUnit.textContent = f.unit;
       timeRow.style.display = '';
     } else {
       timeEl.textContent = '';
+      timeUnit.textContent = '';
       timeRow.style.display = 'none';
     }
   }
@@ -1160,7 +1164,6 @@ function renderStatus(s){
     const dm = s.device_mode;
     if (!state.pending.has('sw-sleep')) setSwitch('sw-sleep', !!dm.sleep_mode);
     if (!state.pending.has('sw-ampup')) setSwitch('sw-ampup', !!dm.amp_up);
-    $('inputMode').textContent = (typeof dm.max_charge_watts === 'number') ? (dm.max_charge_watts + 'W') : '—';
   }
   if (s.device_setting && !state.pending.has('sw-keepon')){
     setSwitch('sw-keepon', !!s.device_setting.machine_never_standby);
