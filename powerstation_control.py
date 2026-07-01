@@ -294,6 +294,40 @@ def parse_status_93_payload(data: str) -> dict:
     temp_raw = h(42, 46)
     temperature_c = round((temp_raw - 2731) / 10, 1) if temp_raw is not None else None
 
+    # UPS mode: NOT a real protocol field on this device - confirmed by
+    # diffing two full status frames captured with UPS on vs off, byte
+    # by byte, with every other field held constant. Every differing
+    # byte was already accounted for by known fields (remaining_input,
+    # temperature); nothing was left over. So this is an ESTIMATE, not
+    # a decoded bit: on AC input present and the AC output switch on,
+    # same logic the unit itself uses to decide whether it's passing
+    # mains through. Based on a single correlated sample - if AC input
+    # and AC-output-on are ever seen without real UPS passthrough
+    # behavior, this estimate is wrong and should be revisited.
+    ac_in = h(10, 14)
+    ups_mode_estimated = bool(ac_in) and switches is not None and switches.get("ac", False)
+
+    # Fan state: no local decoder in either vendor app has a real fan
+    # bit, at any frame length - confirmed by walking all five status
+    # decoders in the Vanpowers bundle (42/50/368/426-char variants)
+    # and the Zendure cloud properties model. The Vanpowers app's own
+    # local-connection UI doesn't read fan state either - it hardcodes
+    # the fan icon to mirror the AC output switch (ot(switchStatus.
+    # acSwitch) right next to the AC switch's own icon update). Doing
+    # the same here for consistency with the vendor app, not because
+    # it's confirmed to reflect the real fan.
+    fan_state_estimated = switches is not None and switches.get("ac", False)
+
+    # 4G switch: unknown_bit2 (bit5 of the switch bitmask byte) is
+    # confirmed from source to be the four_g switch position - see the
+    # bit-order comment above (bit5=four_g, matching the '58' command
+    # this same bit backs in set_four_g_switch). Aliased under a clear
+    # name here since that command has no supporting evidence of
+    # actually doing anything on this device - the bit could just be
+    # sitting inert. Reads back whatever was last written to it, real
+    # radio state or not.
+    four_g_switch_estimated = switches is not None and switches.get("unknown_bit2", False)
+
     result = {
         # CONFIRMED by direct experiment:
         "battery_percent":    h(0, 2),
@@ -310,6 +344,10 @@ def parse_status_93_payload(data: str) -> dict:
         "temperature_c":      temperature_c,
         "remaining_output_minutes": remaining_output,
         "remaining_input_minutes":  remaining_input,
+        # Estimated, not a decoded protocol field - see comments above.
+        "ups_mode_estimated": ups_mode_estimated,
+        "fan_state_estimated": fan_state_estimated,
+        "four_g_switch_estimated": four_g_switch_estimated,
         # Compatibility aliases for existing dashboard JS field names:
         "electricity_pct":        h(0, 2),
         "dc_output_12v_watts":    dc_output_watts,
