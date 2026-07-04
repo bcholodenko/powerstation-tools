@@ -293,22 +293,99 @@
     }
   }
 
-  /* ---------- device-topbar: 4G / AmpUp / fan status icons ---------- */
+  /* ---------- device-topbar: 4G / AmpUp / sleep / fan status icons ----------
+     Grid columns match .device-hero's (1fr / 200px / 1fr, 200px being
+     the gauge's own width) so the boundary between the left column and
+     the middle one lands exactly above the gauge's left edge - that's
+     where AmpUp sits, at the end of the left group. */
   .device-topbar{
-    display:flex;
-    justify-content:space-between;
+    display:grid;
+    grid-template-columns: 1fr 200px 1fr;
     align-items:center;
     margin-bottom: 20px;
   }
+  .device-topbar-left{
+    grid-column: 1;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  .device-topbar-right{
+    grid-column: 3;
+    justify-self: end;
+    display:flex;
+    align-items:center;
+    gap: 14px;
+  }
   .device-top-icon{ width:24px; height:24px; object-fit:contain; display:block; }
-  #fourGTopIcon{ color: rgba(255,255,255,0.22); transition: color .3s, filter .3s; }
-  #fourGTopIcon.on{ color:#3fe8d4; filter: drop-shadow(0 0 4px rgba(63,232,212,0.8)); }
+  .device-top-icon-wrap{ display:inline-flex; align-items:center; justify-content:center; }
+  #ampUpTopIcon{ margin-left: 14px; }
+  /* Per-icon color rules removed - see .mono-status-icon below, which
+     now covers 4G, PV, WiFi, 12V, UPS, and AC uniformly. */
 
   .device-bottombar{
     display:flex;
     justify-content:center;
+    align-items:center;
+    gap: 36px;
     margin-top: 20px;
   }
+
+  /* Static outline icons in the panel corners. */
+  .device-corner-icon{
+    position: absolute;
+    bottom: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .device-corner-icon.right{ right: 18px; }
+  .device-corner-icon.left{ left: 18px; }
+  .device-corner-icon-label{
+    font-family: var(--font-body);
+    font-style: italic;
+    font-size: 8px;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.35);
+  }
+
+  /* ---------- black-pane icon coloring: grey inactive, white active ----------
+     Matches the real device's own display. Applies to every status icon
+     in this panel EXCEPT the fan, which keeps its own bitmap-based
+     on/off images and colors as-is. Shared class so all these icons
+     (SVG currentColor-based, plus AmpUp's bitmap via filter) stay in
+     sync with one rule instead of one-off colors per icon. */
+  .mono-status-icon{
+    color: #707070;
+    transition: color .3s, filter .3s;
+  }
+  .mono-status-icon.on{
+    color: #ffffff;
+    filter: drop-shadow(0 0 4px rgba(255,255,255,0.75));
+  }
+  /* AmpUp is a bitmap <img>, not an SVG, so currentColor doesn't apply -
+     brightness(0) flattens it to a black silhouette regardless of the
+     source image's own colors, then invert() recolors it: invert(0.55)
+     lands on the same mid-grey as the SVG icons' inactive state,
+     invert(1) is pure white. */
+  img.mono-status-icon{ color: transparent; filter: brightness(0) invert(0.55); }
+  img.mono-status-icon.on{ filter: brightness(0) invert(1) drop-shadow(0 0 4px rgba(255,255,255,0.75)); }
+
+  /* Fan: excluded from the grey/white scheme above - matches the real
+     device's own blue fan indicator instead. Grey when off (same grey
+     as everything else), blue when spinning. */
+  #fanTopIcon{ color: #707070; transition: color .3s, filter .3s; transform-origin: 50% 50%; }
+  #fanTopIcon.on{ color: #2E7CF6; filter: drop-shadow(0 0 4px rgba(46,124,246,0.8)); animation: fan-spin 1s linear infinite; }
+  @keyframes fan-spin{ from{ transform: rotate(0deg); } to{ transform: rotate(360deg); } }
+
+  /* Sleep mode: same grey-off as the shared scheme, but blue when on
+     (like the fan) rather than white. */
+  #sleepTopIcon{ color: #707070; transition: color .3s, filter .3s; }
+  #sleepTopIcon.on{ color: #2E7CF6; filter: drop-shadow(0 0 4px rgba(46,124,246,0.8)); }
+
+  /* AC output indicator reverted to the shared white on-state (see
+     .mono-status-icon) - kept separate from sleep/fan's blue. */
 
   .ro{ display:flex; flex-direction:column; gap:2px; }
   .ro .k{ font-size: 10px; letter-spacing:0.08em; text-transform:uppercase; color: var(--text-dim); }
@@ -358,6 +435,25 @@
     color: rgba(255,255,255,0.45);
   }
   .device-panel .ro .v span[id]{ font-variant-numeric: tabular-nums; }
+
+  /* AC-voltage / PV badges - kept monochrome like the rest of the
+     text in this panel; color is reserved for the gauge ticks. Empty
+     when there's nothing to report, so they take no visual space. */
+  .device-panel .badge{
+    font-family: var(--font-body);
+    font-style: normal;
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.55);
+    background: rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 1px 5px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .device-panel .badge:empty{ display: none; }
 
   /* "Much larger" per request - these are short, punchy numeric
      readouts (AC/DC in/out, temperature, recharging time), so they
@@ -659,22 +755,48 @@
   <!-- HERO: battery ring + power readouts -->
   <div class="glass-panel device-panel">
     <div class="device-topbar">
-      <span class="device-top-icon-wrap" title="4G">
-        <svg class="device-top-icon" id="fourGTopIcon" viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <div class="device-topbar-left">
+        <span class="device-top-icon-wrap" title="4G">
+        <svg class="device-top-icon mono-status-icon" id="fourGTopIcon" viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <rect x="1.5" y="4.5" width="21" height="15" rx="3.5" stroke="currentColor" stroke-width="1.6"/>
           <text x="12" y="15.6" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="9" font-weight="700" fill="currentColor" stroke="none">4G</text>
         </svg>
       </span>
-      <span class="device-top-icon-wrap" title="AmpUp mode">
-        <img class="device-top-icon" id="ampUpTopIcon" src="data:image/png;base64,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" data-on="data:image/png;base64,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" data-off="data:image/png;base64,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" alt="" />
+        <span class="device-top-icon-wrap" title="AmpUp mode">
+        <img class="device-top-icon mono-status-icon" id="ampUpTopIcon" src="data:image/png;base64,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" data-on="data:image/png;base64,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" data-off="data:image/png;base64,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" alt="" />
       </span>
-      <span class="device-top-icon-wrap" title="Cooling fan">
-        <img class="device-top-icon" id="fanTopIcon" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADwAAAA8CAQAAACQ9RH5AAADjElEQVRYw+2YW0iUQRTH/+fbbddLF7WyXLuapQTVeyLhQz1IZEVKEoWm7hbUS/TUi/gYFNGFbmxtF5Oyoguk1EPQQwkFQVhRa1lQpBitK63uqvt9p4datHU+d5rdDYQ9sMvHN9+Z38w5Z86cGSAlKUnJVBf6d5Vz07TVvBzzaKT+LPF/ATfaFuZxDe/kgt962dYqXRVslf/0SmbQqe/F8rE3laxuamlwq8V3mrYhI1E+lgS3pvsP065EBpcm5VttoJJrBA2cZPD8ObwbMwSRmWywZTWXJnodS4FRJfldwsFlwhQgMDRr7pxWW4ISSKPmGIJd0GC4LJHH5plDRbwVm6mAbWD00mPjhv5i7nfzBCMBbrN/DTKZgxutjlJq4Iq/1zgxOtiDFteQsqnLRzAgbPhj6vxtuMrbo1MLE6/FMRw3M7yMj5m7TN1gdW/nFuSbWG466v2XL8xQDi66YzZjR6l+ZHJ3GRXhvaJZy4EfwC+K6uaZ1ABHDN102vNzgSLY/pFuw5g44aEibIodnrxUr1cE7xokNz4L1vEWzpTR5+qJxpbMSPXPaR9GJwRdhWS1sdi/RhFMhrOdKtA93uAMKpDTZqJCRTAANDzUdrAH/WNgTpPVNebFLATOZVizwgzYGAiznQdh5wDsnMY3mby2ptFLlvV6OZZRFnQEIiMgBjPAxAwwGCDmyD8Dhj92BVIbPgUAIwCAIDSMwg4ghBAA/c8PYCADDEY/vePbxsOcT1XB+Eofyz/VqITZXIIS6vPdcru/vGoy1LfFHmns+PSfS3v0lgUlcezH7IXkqOljVE/F3H6mpFFTBLs66b0k+MGEQWdq5/NWKYLJwEUpTZ/2SPC2WKv1pKn5GHQdnbEXJt3kbmF/laOLFMGFvXQSP2PofTDc+qAwSzmwThFcFg404/zk8UzOnpemrZuVq8wDQddBOgSf8KRg4K1lg/NJk5FmVs6viKu8zTrKNXSXoku1rzihVdc9m3RLyI23vCXPLH0pbzTKsISmo4+76J7x1P6lNvS72Z2j/xCqfXPmJ+VGICLXsgM+YUOHa22iThJCGTDr8nHijjBCSRcH13D4fpLBJuepR9M+JBk8Ijq0+clT159kcKbI1CdCbXLHdas6eDgaEMBFZ5PsLYE1Ye59Q6eyLstfTsQBDrE1kkS98Ggthb1l4aRcsEXLypB3v6YZPezNea1+w5eSlKRk6sovGvQ9S50KbAAAAAAASUVORK5CYII=" data-on="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADwAAAA8CAMAAAANIilAAAAAz1BMVEUAooEAoIEAoX8AooEAooAAooEAooEAooEAooEAooEAoIAAo4MAqlUAmYAAoIEAoYAAooEAooMAoYAAoYYAooAAoYEAo4AAoYAAooIAoIAAf38AoYEAoYEAooAAooIAo4EAoYEAoYAAooEAoYEAooAA/38Akm0AoX8AoYAAo4EAon8Ao4QAoX8AooEAoYAAqn8AoYAAon8AoYAAooAAoYEAoX8AoYIAooIAoYAAooEAoYMAoYAAooEAAAAApIIAoYEAoYEAn38AoX8AooAAoYBww9L5AAAARHRSTlPoe/3q/sDg/uvU+EgDFHG5ZUr5E+nRq/VwugL4+vtoafTR9tLVAgf8pVNKUx78qx7BZvfz8u56pf35VPj6AC1J6gjyFhvRsh4AAAHbSURBVEjH7ddrd8FAEAZgvWpLxSWs2iLuoa4bUrcgzfz/31RKsmm7Ezbab+aDkzh5Drt5Z0LEOqMiF/xH2Fnr9fEmFLbnwwUATMPgpjkBCIkbI/ZloRcCd7S9hZY8HlQOForSuJCn4fHzi2thKY1X5Axc9izMDgvJrMq5rMrUWr+0yhSCcI7j9H4D8wr/MkRJdANwlmO6u+mdCgV/0UoqjmL1G26ONPhZWrKJYebHtsngdzHTPv7JzGpPQFSTOYJrPuwMQVxDR4z7/JJqbIHgp5gYl/glRAes9KMJI3UUP4pxRuF4jGID6aqEFwrtAaLR6bTXahWXy9mMUspYtUqIZhj3SD93vX42NuO6HnOkJknKDZUx3b4s7tq2BI4nmQ9vI2E2UXyzW1Vxt6r0flWEvO7xde8QllEDw/iW3rbcnetgGL+ZtOgeVQYIfsdj5GGaL4jxGg/w0jtWMmIc0DockxVyq+ZI075ZM35WRrB9hY2LND/NYSFBB5Vv9GXRhGEj0vemGhBP8XCm/nkWkG3hY8G3FxHpHzTslDVjVeW4L435NkDpDIwm7BSMZTugvOzQREEaG14/d63QWEtZoTFLxkPgj6PT8wheDOcyc5vXvVHX13JPjMsflH/Cn0TUUTDlvk8FAAAAAElFTkSuQmCC" data-off="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADwAAAA8CAQAAACQ9RH5AAADjElEQVRYw+2YW0iUQRTH/+fbbddLF7WyXLuapQTVeyLhQz1IZEVKEoWm7hbUS/TUi/gYFNGFbmxtF5Oyoguk1EPQQwkFQVhRa1lQpBitK63uqvt9p4datHU+d5rdDYQ9sMvHN9+Z38w5Z86cGSAlKUnJVBf6d5Vz07TVvBzzaKT+LPF/ATfaFuZxDe/kgt962dYqXRVslf/0SmbQqe/F8rE3laxuamlwq8V3mrYhI1E+lgS3pvsP065EBpcm5VttoJJrBA2cZPD8ObwbMwSRmWywZTWXJnodS4FRJfldwsFlwhQgMDRr7pxWW4ISSKPmGIJd0GC4LJHH5plDRbwVm6mAbWD00mPjhv5i7nfzBCMBbrN/DTKZgxutjlJq4Iq/1zgxOtiDFteQsqnLRzAgbPhj6vxtuMrbo1MLE6/FMRw3M7yMj5m7TN1gdW/nFuSbWG466v2XL8xQDi66YzZjR6l+ZHJ3GRXhvaJZy4EfwC+K6uaZ1ABHDN102vNzgSLY/pFuw5g44aEibIodnrxUr1cE7xokNz4L1vEWzpTR5+qJxpbMSPXPaR9GJwRdhWS1sdi/RhFMhrOdKtA93uAMKpDTZqJCRTAANDzUdrAH/WNgTpPVNebFLATOZVizwgzYGAiznQdh5wDsnMY3mby2ptFLlvV6OZZRFnQEIiMgBjPAxAwwGCDmyD8Dhj92BVIbPgUAIwCAIDSMwg4ghBAA/c8PYCADDEY/vePbxsOcT1XB+Eofyz/VqITZXIIS6vPdcru/vGoy1LfFHmns+PSfS3v0lgUlcezH7IXkqOljVE/F3H6mpFFTBLs66b0k+MGEQWdq5/NWKYLJwEUpTZ/2SPC2WKv1pKn5GHQdnbEXJt3kbmF/laOLFMGFvXQSP2PofTDc+qAwSzmwThFcFg404/zk8UzOnpemrZuVq8wDQddBOgSf8KRg4K1lg/NJk5FmVs6viKu8zTrKNXSXoku1rzihVdc9m3RLyI23vCXPLH0pbzTKsISmo4+76J7x1P6lNvS72Z2j/xCqfXPmJ+VGICLXsgM+YUOHa22iThJCGTDr8nHijjBCSRcH13D4fpLBJuepR9M+JBk8Ijq0+clT159kcKbI1CdCbXLHdas6eDgaEMBFZ5PsLYE1Ye59Q6eyLstfTsQBDrE1kkS98Ggthb1l4aRcsEXLypB3v6YZPezNea1+w5eSlKRk6sovGvQ9S50KbAAAAAAASUVORK5CYII=" alt="" />
-      </span>
+      </div>
+      <div class="device-topbar-right">
+        <span class="device-top-icon-wrap" title="Sleep mode">
+          <svg class="device-top-icon" id="sleepTopIcon" viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <mask id="moonMask">
+              <rect x="0" y="0" width="24" height="24" fill="white"/>
+              <circle cx="9" cy="9.75" r="5.8" fill="black"/>
+            </mask>
+            <circle cx="6.5" cy="12" r="7" fill="currentColor" mask="url(#moonMask)"/>
+            <text x="13.5" y="16" font-family="-apple-system,sans-serif" font-size="12" font-weight="800" fill="currentColor" stroke="none">Z</text>
+            <text x="19" y="7" font-family="-apple-system,sans-serif" font-size="8" font-weight="800" fill="currentColor" stroke="none">z</text>
+          </svg>
+        </span>
+        <span class="device-top-icon-wrap" title="Cooling fan">
+          <svg class="device-top-icon" id="fanTopIcon" viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <g stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none">
+              <path d="M12,12 C10.5,6 5,2 1,3.5"/>
+              <path d="M12,12 C10.5,6 5,2 1,3.5" transform="rotate(60 12 12)"/>
+              <path d="M12,12 C10.5,6 5,2 1,3.5" transform="rotate(120 12 12)"/>
+              <path d="M12,12 C10.5,6 5,2 1,3.5" transform="rotate(180 12 12)"/>
+              <path d="M12,12 C10.5,6 5,2 1,3.5" transform="rotate(240 12 12)"/>
+              <path d="M12,12 C10.5,6 5,2 1,3.5" transform="rotate(300 12 12)"/>
+            </g>
+            <circle cx="12" cy="12" r="1.7" fill="currentColor"/>
+          </svg>
+        </span>
+      </div>
     </div>
+
     <div class="hero device-hero">
       <div class="readouts readouts-left">
-        <div class="ro"><span class="k">AC in</span><span class="v" id="acIn">—<span class="unit">W</span></span></div>
+        <div class="ro"><span class="k">AC in <span class="badge" id="acVoltageBadge"></span></span><span class="v" id="acIn">—<span class="unit">W</span></span></div>
         <div class="ro"><span class="k">AC out</span><span class="v" id="acOut">—<span class="unit">W</span></span></div>
         <div class="ro"><span class="k">Temperature</span><span class="v"><span id="tempValue">—</span><span class="unit" id="tempUnit" role="button" tabindex="0" title="Click to switch °C/°F" style="cursor:pointer; text-decoration:underline dotted;">°C</span></span></div>
         <div class="ro" id="remainTimeRow" style="display:none"><span class="k" id="remainLabel">Time remaining</span><span class="v" id="remainTime">—</span><span class="unit-below" id="remainTimeUnit"></span></div>
@@ -688,14 +810,61 @@
         </div>
       </div>
       <div class="readouts readouts-right">
-        <div class="ro"><span class="k">DC in</span><span class="v" id="dcIn">—<span class="unit">W</span></span></div>
+        <div class="ro"><span class="k">DC in <span class="badge" id="pvBadge"></span></span><span class="v" id="dcIn">—<span class="unit">W</span></span></div>
         <div class="ro"><span class="k">DC out</span><span class="v" id="dcOut">—<span class="unit">W</span></span></div>
       </div>
     </div>
     <div class="device-bottombar">
-      <span class="device-top-icon-wrap" title="UPS mode">
-        <img class="device-top-icon" id="upsBottomIcon" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADwAAAA8CAQAAACQ9RH5AAAEZUlEQVRYw+2YW0wcVRjHf2dmd9kFQsu9UIttoKBtUEmlNUbRxtqIReOLWG2MjYi8tJq++NLES3ywT2gkLakB0tRYIk8mxhhiDGqKWKC1AkGqAWoEllvbBda9sDNzfGDBUnZnd1mrxuz/aSZn5vzmu5zvfHMgoYQSSiih/7pENA99mOZIM5KkEu2kFhnQAn+U3tirxQFuyjCeplLuIBtr1OZI5sWo6Aq0TQ28Y6wLfDpLNiqVMiX8E1bsLIQe0hkRR19tXwf4ZKraKqpMncqjeOkM71CfqHzlWyHXjpjETQrLG+ZYhRK24DXzud1oaNwW+t2wainmkHkgNnIvVlMwUKxWxQjW7ibDbEYbFaQCHnOwjfKTqTGA21S9j7P4w0d3NzkAkSxG5Dscp5OjBrsOqsds74laroXOyUK2B68jgWWKniq+bt4nRVRguZkjgTNqp/qSvLI2K5eiu6RdlFPOhtALao7rYkGxyQe0T5qfq3eYLKeWbO0pwwJiH88CA+K4GJdvy1sS5HFWp+oc7bjWLosOLmOVLuVn4xzg5ZSlvmZiOVS3fuQjskEogAogdlKTfNjXoB9Y7ag+hoAyNgHg4/xaLGiyl4cpBmPpXYes1btpC2OxFE2lmh3Ug/IYOhc4aknWzrEllCefoADQuEg/IStjj6hnjjkxbEwCs5xI/6BaD2OxkPQBfFSBW561vK8/qR0Ppu8aZQIwzBBhCnK5bAXRbXvRJ+Ul8VbdFzevinBVqUu+lvyZ+wQvkBr6CTvJgJMuFiPkteqhXjRN/BJlrW7cqjTxWPjxfKpw0c5cpHXcLZ+pc8ZQudTn2Ws2YSY+ephfZyNgtrlbTUdx8CO/IdcJtqy/eemOq/VR+JcUlcW5lDDCGAAl5HIJNzlsRwV8zDIWzGuV+8hHwUl/xAoeFTiNu3AFwXkUM4ibDRSjoqGgMsk3LGBnP7n4keSQRUcEtCUed03Tj5XNFFLGdxSQxQy96JRSQB4jtw/sZhRwkkER50nFwu+MATrppN2+rF7WIm4yScGDRh52fEzz6T+R1Qo2JH7GuUYuD4Ur7H8/+A6yuc4iC3Qwwzb2c38UvX9crr6TauzY8XMBgHm+pIwSykiJuHXEBdZZxIObqyzvAQF6mGA3RUxyJX6wcVNMFOTK7uukEwMNLTiVQgDJGBoHKIwANomx8BLsFuaRpCMAhQ340FYs9qzcWXiQwxQA4CeA7a+exmvosVnsxLvUBHhwsZWdzJFLFuMho6dzA517kOgUkhSsc0vz2LwxgY2fcC2DB9nDHjSs+BkM2eVLRihiExlIkphdcbTUlMsvu2vW7vbhwZ/PXCxh19L1DFNAgHG+DyaSBZ2pVd1+gF8xUPExzA+4lwM2arxbPh3jb2pzvtZKRVyL3COP1J2J8TcVaibUGvGVkOvGzlLr/Dj0+xGPIk6lW1+Xh2SatAsRAzKAhwHxZm1vuM+OarKWbG2HyDZsUR+BSDEvrm4cqtYTp1sJJZTQ/0l/AtQAeybRy13eAAAAAElFTkSuQmCC" data-on="data:image/png;base64,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" data-off="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADwAAAA8CAQAAACQ9RH5AAAEZUlEQVRYw+2YW0wcVRjHf2dmd9kFQsu9UIttoKBtUEmlNUbRxtqIReOLWG2MjYi8tJq++NLES3ywT2gkLakB0tRYIk8mxhhiDGqKWKC1AkGqAWoEllvbBda9sDNzfGDBUnZnd1mrxuz/aSZn5vzmu5zvfHMgoYQSSiih/7pENA99mOZIM5KkEu2kFhnQAn+U3tirxQFuyjCeplLuIBtr1OZI5sWo6Aq0TQ28Y6wLfDpLNiqVMiX8E1bsLIQe0hkRR19tXwf4ZKraKqpMncqjeOkM71CfqHzlWyHXjpjETQrLG+ZYhRK24DXzud1oaNwW+t2wainmkHkgNnIvVlMwUKxWxQjW7ibDbEYbFaQCHnOwjfKTqTGA21S9j7P4w0d3NzkAkSxG5Dscp5OjBrsOqsds74laroXOyUK2B68jgWWKniq+bt4nRVRguZkjgTNqp/qSvLI2K5eiu6RdlFPOhtALao7rYkGxyQe0T5qfq3eYLKeWbO0pwwJiH88CA+K4GJdvy1sS5HFWp+oc7bjWLosOLmOVLuVn4xzg5ZSlvmZiOVS3fuQjskEogAogdlKTfNjXoB9Y7ag+hoAyNgHg4/xaLGiyl4cpBmPpXYes1btpC2OxFE2lmh3Ug/IYOhc4aknWzrEllCefoADQuEg/IStjj6hnjjkxbEwCs5xI/6BaD2OxkPQBfFSBW561vK8/qR0Ppu8aZQIwzBBhCnK5bAXRbXvRJ+Ul8VbdFzevinBVqUu+lvyZ+wQvkBr6CTvJgJMuFiPkteqhXjRN/BJlrW7cqjTxWPjxfKpw0c5cpHXcLZ+pc8ZQudTn2Ws2YSY+ephfZyNgtrlbTUdx8CO/IdcJtqy/eemOq/VR+JcUlcW5lDDCGAAl5HIJNzlsRwV8zDIWzGuV+8hHwUl/xAoeFTiNu3AFwXkUM4ibDRSjoqGgMsk3LGBnP7n4keSQRUcEtCUed03Tj5XNFFLGdxSQxQy96JRSQB4jtw/sZhRwkkER50nFwu+MATrppN2+rF7WIm4yScGDRh52fEzz6T+R1Qo2JH7GuUYuD4Ur7H8/+A6yuc4iC3Qwwzb2c38UvX9crr6TauzY8XMBgHm+pIwSykiJuHXEBdZZxIObqyzvAQF6mGA3RUxyJX6wcVNMFOTK7uukEwMNLTiVQgDJGBoHKIwANomx8BLsFuaRpCMAhQ340FYs9qzcWXiQwxQA4CeA7a+exmvosVnsxLvUBHhwsZWdzJFLFuMho6dzA517kOgUkhSsc0vz2LwxgY2fcC2DB9nDHjSs+BkM2eVLRihiExlIkphdcbTUlMsvu2vW7vbhwZ/PXCxh19L1DFNAgHG+DyaSBZ2pVd1+gF8xUPExzA+4lwM2arxbPh3jb2pzvtZKRVyL3COP1J2J8TcVaibUGvGVkOvGzlLr/Dj0+xGPIk6lW1+Xh2SatAsRAzKAhwHxZm1vuM+OarKWbG2HyDZsUR+BSDEvrm4cqtYTp1sJJZTQ/0l/AtQAeybRy13eAAAAAElFTkSuQmCC" alt="" />
+      <span class="device-top-icon-wrap" title="PV/solar input">
+        <svg class="device-top-icon mono-status-icon" id="pvTopIcon" viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="6" width="20" height="12" rx="1.5" stroke="currentColor" stroke-width="1.6"/>
+          <line x1="9.33" y1="6" x2="9.33" y2="18" stroke="currentColor" stroke-width="1.2"/>
+          <line x1="16.66" y1="6" x2="16.66" y2="18" stroke="currentColor" stroke-width="1.2"/>
+          <line x1="2" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.2"/>
+        </svg>
       </span>
+      <span class="device-top-icon-wrap" title="UPS mode">
+        <svg class="device-top-icon mono-status-icon" id="upsBottomIcon" viewBox="0 0 26 32" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M 1.3,7.1 L 1.3,4.9 L 18.7,4.9 L 18.7,0.1 L 24.7,7.1 Z" fill="currentColor"/>
+          <text x="13" y="20" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="12" font-weight="900" fill="currentColor" stroke="none">UPS</text>
+          <path d="M 24.7,24.55 L 24.7,26.75 L 7.3,26.75 L 7.3,31.55 L 1.3,24.55 Z" fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="device-top-icon-wrap" title="Auto-off disabled (keep powered on)">
+        <svg class="device-top-icon mono-status-icon" id="autoOffTopIcon" viewBox="0 0 24 26" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="2" width="20" height="19" rx="6" stroke="currentColor" stroke-width="1.8"/>
+          <rect x="8" y="20.3" width="8" height="2.6" rx="1" fill="currentColor"/>
+          <path d="M4 14.5 L8 14.5 L9.5 11 L12.5 17.5 L14.5 11.5 L16 14.5 L20 14.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <path d="M14 4.5 L10.8 10 L13 10 L11 15 L16 9 L13.5 9 Z" fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="device-top-icon-wrap" title="Wi-Fi connection to power station">
+        <svg class="device-top-icon mono-status-icon" id="wifiTopIcon" viewBox="0 0 24 24" width="24" height="24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M4 9.5C8.5 5 15.5 5 20 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M7 13C10 10 14 10 17 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M10 16.3C11.5 14.8 12.5 14.8 14 16.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <circle cx="12" cy="19" r="1.2" fill="currentColor"/>
+        </svg>
+      </span>
+    </div>
+    <div class="device-corner-icon right mono-status-icon" title="12V car charger port" id="dc12vIconWrap">
+      <svg viewBox="0 0 22 30" width="22" height="28" fill="none" xmlns="http://www.w3.org/2000/svg" id="dc12vIcon">
+        <rect x="9" y="1.4" width="4" height="5.2" rx="2" stroke="currentColor" stroke-width="1.3"/>
+        <path d="M9 6.6 L13 6.6 L15 9.5 L14.5 20 L7.5 20 L7 9.5 Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        <line x1="8.3" y1="21.3" x2="13.7" y2="21.3" stroke="currentColor" stroke-width="0.8"/>
+        <path d="M7 12 C6 12 5.5 12.5 5.5 13.3 L5.5 15.7 C5.5 16.5 6 17 7 17" stroke="currentColor" stroke-width="1.1"/>
+        <path d="M15 12 C16 12 16.5 12.5 16.5 13.3 L16.5 15.7 C16.5 16.5 16 17 15 17" stroke="currentColor" stroke-width="1.1"/>
+      </svg>
+    </div>
+    <div class="device-corner-icon left mono-status-icon" title="AC output" id="acChargingIconWrap">
+      <svg viewBox="0 0 26 29" width="24" height="28" fill="none" xmlns="http://www.w3.org/2000/svg" id="acChargingIcon">
+        <line x1="9" y1="2" x2="9" y2="7.2" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+        <line x1="15" y1="2" x2="15" y2="7.2" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+        <line x1="3" y1="7.8" x2="21" y2="7.8" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M4.8 8.2 L4.8 13.5 C4.8 18 8 21 12 21 C16 21 19.2 18 19.2 13.5 L19.2 8.2" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" fill="none"/>
+        <text x="12" y="16.8" text-anchor="middle" font-family="-apple-system,sans-serif" font-size="7.5" font-weight="800" fill="currentColor" stroke="none">AC</text>
+        <path d="M12 21 L12 23.5 C12 26.5 15.5 26.5 15.5 23.5 C15.5 21.7 18.5 21.7 18.5 23.5 L22.5 23.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+      </svg>
     </div>
   </div>
 
@@ -789,6 +958,19 @@
     </div>
   </div>
 
+  <!-- SCREEN TIMEOUT -->
+  <div class="glass-panel">
+    <div class="panel-title">Screen timeout</div>
+    <div class="seg" id="screenStandbySeg">
+      <button data-level="1">10s</button>
+      <button data-level="2">30s</button>
+      <button data-level="3">1m</button>
+      <button data-level="4">5m</button>
+      <button data-level="5">30m</button>
+      <button data-level="6">Never</button>
+    </div>
+  </div>
+
   <!-- LED -->
   <div class="glass-panel">
     <div class="panel-title">LED</div>
@@ -822,19 +1004,7 @@
       <button id="wifiConnectBtn">Connect device to Wi-Fi</button>
     </div>
     <p class="hint" style="margin:0 0 10px;">
-      Heads up: this has completed the full handshake successfully in testing
-      without the unit actually joining the network afterward. The unit's
-      cloud service (needed to finish registration) appears to be offline,
-      which may be why - "Done" here doesn't guarantee it actually joined.
-      Check your router's device list to confirm either way.
-    </p>
-    <p class="hint" style="margin:0 0 10px;">
-      Why this dashboard exists: the official app's own AC/DC switches (and
-      most other controls) are gated behind cloud-reported "online" status -
-      a device that's never completed cloud registration, like this one,
-      can't be controlled through the real app's UI at all. This dashboard
-      talks to the unit's local protocol directly, bypassing that
-      requirement entirely.
+      This feature is not functional yet.
     </p>
     <div class="log" id="wifiLog"></div>
   </div>
@@ -943,6 +1113,17 @@ const state = {
   lastTempC: null,
   tempUnit: localStorage.getItem('powerstation-temp-unit') || 'C',
   inFlight: new Map(),
+  // Machine + screen standby share one byte on the device and can't be
+  // read back (see set_standby_levels in control.py), so this is the
+  // only record of "current" values - starts at 6/6 (never/never),
+  // the least disruptive assumption, and updates as either control is
+  // used. Whichever one you haven't touched yet reflects this default,
+  // not the device's actual setting.
+  standby: { machine: 6, screen: 6 },
+  // True for the duration of a WiFi provisioning attempt - pauses the
+  // regular status poll so it doesn't queue up competing connections
+  // to the device while it's mid-handshake. See refreshStatus().
+  provisioningInProgress: false,
 };
 
 function $(id){ return document.getElementById(id); }
@@ -990,13 +1171,13 @@ const ACTIVITY_LABELS = {
   '/api/ambient-light': 'Ambient light',
   '/api/sleep-mode': 'Sleep mode',
   '/api/amp-up': 'AmpUp mode',
-  '/api/keep-powered-on': 'Keep powered on',
   '/api/ac-hz': 'AC frequency',
   '/api/led/brightness': 'LED brightness',
   '/api/led/color': 'LED color',
   '/api/led/color-and-brightness': 'LED color/brightness',
   '/api/charge-limit': 'Charge limit',
   '/api/charge-speed': 'Charge speed',
+  '/api/standby-levels': 'Standby timeouts',
   '/api/advanced/ota-light': 'OTA light',
   '/api/wifi/provision': 'WiFi provisioning',
 };
@@ -1048,6 +1229,8 @@ function setConnected(ok, detail){
   state.connected = ok;
   $('statusDot').className = 'dot ' + (ok ? 'ok' : 'bad');
   $('statusText').textContent = ok ? 'connected' : (detail || 'disconnected');
+  const wifiIcon = $('wifiTopIcon');
+  if (wifiIcon) wifiIcon.classList.toggle('on', ok);
 }
 
 function setSwitch(id, on, isPending){
@@ -1070,6 +1253,15 @@ function formatRemainTime(mins){
 }
 
 function renderStatus(s){
+  // Not a live readout - see set_standby_levels in control.py: machine
+  // standby can't be read back from this device at all, so this just
+  // reflects the last value we ourselves sent (or the 6/"never"
+  // default before you've touched either standby control). Updated
+  // here so it stays in sync on every render regardless of which
+  // control last changed it.
+  const autoOffTopIcon = $('autoOffTopIcon');
+  if (autoOffTopIcon) autoOffTopIcon.classList.toggle('on', state.standby.machine === 6);
+
   if (typeof s.electricity_pct === 'number'){
     $('batteryPct').textContent = s.electricity_pct;
     const litCount = Math.round((s.electricity_pct / 100) * GAUGE_TICK_COUNT);
@@ -1078,9 +1270,34 @@ function renderStatus(s){
     });
   }
   if (typeof s.ac_input_watts === 'number') $('acIn').innerHTML = s.ac_input_watts + '<span class="unit">W</span>';
+  const acChargingIconWrap = $('acChargingIconWrap');
+  if (acChargingIconWrap) acChargingIconWrap.classList.toggle('on', !!s.fan_state_estimated);
   if (typeof s.dc_input_watts === 'number') $('dcIn').innerHTML = s.dc_input_watts + '<span class="unit">W</span>';
   if (typeof s.ac_output_watts === 'number') $('acOut').innerHTML = s.ac_output_watts + '<span class="unit">W</span>';
   if (typeof s.dc_output_watts === 'number') $('dcOut').innerHTML = s.dc_output_watts + '<span class="unit">W</span>';
+
+  // AC voltage: real bit, confirmed from source (deviceMode.acVoltage),
+  // but the vendor's own code maps it to an actual voltage number
+  // differently depending on firmware version (110 vs 220 swap sides
+  // of the condition) - since we don't know this unit's firmware
+  // version, showing "High/Low" rather than guessing a specific
+  // number that could come out backwards.
+  const acVoltageBadge = $('acVoltageBadge');
+  if (acVoltageBadge) {
+    acVoltageBadge.textContent = (typeof s.ac_voltage_high === 'boolean' && s.ac_input_watts > 0)
+      ? (s.ac_voltage_high ? 'High V' : 'Low V') : '';
+  }
+
+  // PV/solar input detected - real bit, confirmed from source
+  // (deviceMode.pv), same byte as AmpUp/sleep.
+  const pvBadge = $('pvBadge');
+  if (pvBadge) {
+    pvBadge.textContent = s.pv_input_detected ? 'PV' : '';
+  }
+  const pvTopIcon = $('pvTopIcon');
+  if (pvTopIcon) {
+    pvTopIcon.classList.toggle('on', !!s.pv_input_detected);
+  }
   if (typeof s.temperature_c === 'number') { state.lastTempC = s.temperature_c; renderTemperature(); }
 
   // Fan state: no local decoder in either vendor app has a real fan
@@ -1089,16 +1306,13 @@ function renderStatus(s){
   // the AC output switch state. Doing the same here for consistency,
   // via fan_state_estimated in control.py.
   const fanTopIcon = $('fanTopIcon');
-  if (typeof s.fan_state_estimated === 'boolean') {
-    fanTopIcon.src = s.fan_state_estimated ? fanTopIcon.dataset.on : fanTopIcon.dataset.off;
-  } else {
-    fanTopIcon.src = fanTopIcon.dataset.off;
-  }
+  fanTopIcon.classList.toggle('on', !!s.fan_state_estimated);
 
   // AmpUp top icon - real, independently confirmed field (unlike fan/UPS/4G).
   const ampUpTopIcon = $('ampUpTopIcon');
   if (typeof s.amp_up === 'boolean') {
     ampUpTopIcon.src = s.amp_up ? ampUpTopIcon.dataset.on : ampUpTopIcon.dataset.off;
+    ampUpTopIcon.classList.toggle('on', s.amp_up);
   }
 
   // 4G top icon - see four_g_switch_estimated in control.py: bit
@@ -1116,9 +1330,9 @@ function renderStatus(s){
   // the AC output switch on. See ups_mode_estimated in control.py.
   const upsBottomIcon = $('upsBottomIcon');
   if (typeof s.ups_mode_estimated === 'boolean') {
-    upsBottomIcon.src = s.ups_mode_estimated ? upsBottomIcon.dataset.on : upsBottomIcon.dataset.off;
+    upsBottomIcon.classList.toggle('on', s.ups_mode_estimated);
   } else {
-    upsBottomIcon.src = upsBottomIcon.dataset.off;
+    upsBottomIcon.classList.remove('on');
   }
 
   // Remaining time display - API already converts the device's 0xFFFF
@@ -1159,11 +1373,15 @@ function renderStatus(s){
     if (!state.pending.has('sw-dc')) setSwitch('sw-dc', !!sw.dc);
     if (!state.pending.has('sw-beep')) setSwitch('sw-beep', !!sw.buzzer);
     if (!state.pending.has('sw-ambient')) setSwitch('sw-ambient', !!sw.ambient_light);
+    const dc12vIconWrap = $('dc12vIconWrap');
+    if (dc12vIconWrap) dc12vIconWrap.classList.toggle('on', !!sw.dc);
   }
   if (s.device_mode){
     const dm = s.device_mode;
     if (!state.pending.has('sw-sleep')) setSwitch('sw-sleep', !!dm.sleep_mode);
     if (!state.pending.has('sw-ampup')) setSwitch('sw-ampup', !!dm.amp_up);
+    const sleepTopIcon = $('sleepTopIcon');
+    if (sleepTopIcon) sleepTopIcon.classList.toggle('on', !!dm.sleep_mode);
   }
   if (s.device_setting && !state.pending.has('sw-keepon')){
     setSwitch('sw-keepon', !!s.device_setting.machine_never_standby);
@@ -1171,8 +1389,8 @@ function renderStatus(s){
   if (s.battery_setting && s.battery_setting.charge_limit_percent && !state.pending.has('charge')){
     setActiveSeg(s.battery_setting.charge_limit_percent);
   }
-  if (s.device_mode && s.device_mode.max_charge_watts && !state.pending.has('chargeSpeed')){
-    setActiveChargeSpeed(s.device_mode.max_charge_watts);
+  if (typeof s.charge_speed_watts === 'number' && !state.pending.has('chargeSpeed')){
+    setActiveChargeSpeed(s.charge_speed_watts);
   }
   if (s.led){
     if (!state.pending.has('ledBrightness')){
@@ -1220,6 +1438,7 @@ function renderDeviceInfo(s){
 }
 
 async function refreshStatus(showSpinner){
+  if (state.provisioningInProgress) return;
   const btn = $('refreshBtn');
   if (showSpinner) btn.classList.add('spinning');
   try{
@@ -1265,7 +1484,11 @@ wireSwitch('sw-beep',    (on) => api('POST', '/api/beep', {on}));
 wireSwitch('sw-ambient', (on) => api('POST', '/api/ambient-light', {on}));
 wireSwitch('sw-sleep',   (on) => api('POST', '/api/sleep-mode', {on}));
 wireSwitch('sw-ampup',   (on) => api('POST', '/api/amp-up', {on}));
-wireSwitch('sw-keepon',  (on) => api('POST', '/api/keep-powered-on', {on}));
+wireSwitch('sw-keepon',  async (on) => {
+  const machine = on ? 6 : 1;
+  await api('POST', '/api/standby-levels', {machine, screen: state.standby.screen});
+  state.standby.machine = machine;
+});
 
 // ---- charge limit segmented control ----
 function setActiveSeg(pct){
@@ -1308,6 +1531,35 @@ $('chargeSpeedSeg').addEventListener('click', async (ev) => {
     setLog(e.message, 'err');
   } finally {
     state.pending.delete('chargeSpeed');
+  }
+});
+
+// ---- screen standby segmented control ----
+// No live readout: the current level only comes back in the long-form
+// status, which this device never sends locally (confirmed - see
+// set_standby_levels in control.py), so unlike most controls here,
+// this one can't highlight the active button from device state, only
+// from the last button you pressed. Also always sends the current
+// machine-standby value alongside it, since the two share one byte.
+function setActiveScreenStandby(level){
+  document.querySelectorAll('#screenStandbySeg button').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.level) === level);
+  });
+}
+$('screenStandbySeg').addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('button');
+  if (!btn) return;
+  const level = Number(btn.dataset.level);
+  state.pending.add('screenStandby');
+  setActiveScreenStandby(level);
+  try{
+    await api('POST', '/api/standby-levels', {machine: state.standby.machine, screen: level});
+    state.standby.screen = level;
+    setLog('');
+  } catch(e){
+    setLog(e.message, 'err');
+  } finally {
+    state.pending.delete('screenStandby');
   }
 });
 
@@ -1379,12 +1631,20 @@ $('wifiConnectBtn').addEventListener('click', async () => {
   const originalLabel = btn.textContent;
   btn.textContent = 'Connecting… (up to 30s)';
   setWifiLog('Talking to the device - keep this page open...');
+  // Regular status polling (every 6s) shares the bridge's one device
+  // connection with provisioning. Without this, polls queued up during
+  // the ~30s handshake all fire at once the moment it finishes,
+  // opening a burst of competing connections right when the device is
+  // mid-handshake - confirmed in logs as overlapping '61' exchanges
+  // with drifting serial numbers right after a provisioning attempt.
+  state.provisioningInProgress = true;
   try{
     await api('POST', '/api/wifi/provision', {ssid, password});
     setWifiLog('Done. The device should now be joining "' + ssid + '" and will drop its own hotspot.', 'ok');
   } catch(e){
     setWifiLog(e.message, 'err');
   } finally {
+    state.provisioningInProgress = false;
     btn.disabled = false;
     btn.textContent = originalLabel;
   }
@@ -1428,8 +1688,28 @@ $('scanBtn').addEventListener('click', async () => {
 
 // ---- refresh button + polling ----
 $('refreshBtn').addEventListener('click', () => refreshStatus(true));
-refreshStatus(true);
-setInterval(() => refreshStatus(false), 6000);
+// Guards against overlapping polls: a single refreshStatus() call can
+// now take well over 6s (a dead connection triggers a fresh reconnect
+// + up to a 15s handshake wait, and they share one lock on the bridge
+// side with WHATEVER else is in flight, including manual button
+// clicks). Without this, the initial load call and every subsequent
+// setInterval tick fire regardless of whether the previous one ever
+// finished, and they pile up behind that same lock faster than any of
+// them can resolve - the "queue keeps increasing" symptom. Shared
+// between the initial call and the interval so they can't race each
+// other either.
+let pollInFlight = false;
+async function pollStatus(){
+  if (pollInFlight) return;
+  pollInFlight = true;
+  try {
+    await refreshStatus(false);
+  } finally {
+    pollInFlight = false;
+  }
+}
+pollStatus();
+setInterval(pollStatus, 6000);
 </script>
 
 </body>
