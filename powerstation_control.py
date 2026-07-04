@@ -221,15 +221,22 @@ def parse_status_93_payload(data: str) -> dict:
       hex[10:14] AC input watts                     - confirmed
       hex[14:18] DC input watts
       hex[18:22] AC output watts                    - confirmed
-      hex[22:34] DC output watts, sum of 5 port readings - confirmed
+      hex[22:26] DC output, 12V rail (dc_output_12v_watts)
+      hex[26:34] DC output, 4 individual ports, 1 byte each
+                 (dc_output_ports_watts) - dc_output_watts is the sum
+                 of all 5 - confirmed
       hex[34:36] ambient light color index
       hex[36:38] ambient light brightness
       hex[38:40] switch bitmask: bit7=acHz, bit6=lbs, bit5=four_g,
                  bit4=ambient_light, bit3=buzzer, bit2=dc, bit1=ac,
                  bit0=master
-      hex[40:42] bit0=ampUp (confirmed), bit1=sleep mode, bits7-5=
-                 charge speed level (1-5, see set_max_charge_watts) -
-                 bits4-3 unknown, preserved on writes
+      hex[40:42] bit0=ampUp, bit1=sleep/"silent" mode (same field,
+                 deviceMode.silent in source - two names for one bit),
+                 bit2=reserved (always written 0), bit3=AC voltage high
+                 (deviceMode.acVoltage), bit4=PV/solar input detected
+                 (deviceMode.pv), bits7-5=charge speed level 1-5 (see
+                 set_max_charge_watts) - all confirmed, same byte this
+                 client already reads/writes for ampUp and sleep
       hex[42:46] temperature, raw ADC count: celsius = (raw - 2731) / 10
                  (same formula as the long-form parser's temperature
                  field) - every captured sample decodes to a plausible
@@ -265,9 +272,28 @@ def parse_status_93_payload(data: str) -> dict:
     amp_byte = h(40, 42)
     amp_up = bool(amp_byte & 0x01) if amp_byte is not None else None
     sleep_mode = bool((amp_byte >> 1) & 0x01) if amp_byte is not None else None
+    # bit2 is a hardcoded '0' on every write (see set_max_charge_watts/
+    # set_amp_up_mode/set_sleep_mode) - reserved/unused, not a real flag.
+    # bit3/bit4 and bits7-5 confirmed from source (deviceMode.acVoltage,
+    # deviceMode.pv, deviceMode.inputPower - the same fields the long-
+    # form parser already exposes under those names) but reached here
+    # through the short '93' byte instead, which this device actually
+    # sends. Same confirmation level as amp_up/sleep_mode above: it's
+    # the literal byte we read and write, not an inference.
+    ac_voltage_high = bool((amp_byte >> 3) & 0x01) if amp_byte is not None else None
+    pv_input_detected = bool((amp_byte >> 4) & 0x01) if amp_byte is not None else None
+    charge_speed_level = (amp_byte >> 5) & 0x07 if amp_byte is not None else None
+    charge_speed_watts = {1: 300, 2: 500, 3: 800, 4: 1200, 5: 1800}.get(charge_speed_level)
 
-    # DC output is a SUM across 5 separate port measurements
-    dc_parts = [h(22, 26), h(26, 28), h(28, 30), h(30, 32), h(32, 34)]
+    # DC output is a SUM across 5 separate port measurements: one 4-hex
+    # "12V" rail reading plus four single-byte port readings. Matches
+    # the long-form parser's dc_output_12v_watts/dc_output_ports_watts
+    # split - previously this short-form parser summed all 5 into one
+    # number and mislabeled the total as "dc_output_12v_watts", which
+    # is wrong whenever the other 4 ports are actually carrying load.
+    dc_12v_watts = h(22, 26)
+    dc_port_watts = [h(26, 28), h(28, 30), h(30, 32), h(32, 34)]
+    dc_parts = [dc_12v_watts] + dc_port_watts
     dc_output_watts = sum(p for p in dc_parts if p is not None) if any(p is not None for p in dc_parts) else None
 
     byte_list = [data[i:i+2] for i in range(0, len(data), 2)]
@@ -335,11 +361,14 @@ def parse_status_93_payload(data: str) -> dict:
         "ac_output_watts":    h(18, 22),
         "dc_output_watts":    dc_output_watts,
         "amp_up":             amp_up,
+        "sleep_mode":         sleep_mode,
+        "ac_voltage_high":    ac_voltage_high,
+        "pv_input_detected":  pv_input_detected,
+        "charge_speed_watts": charge_speed_watts,
         # From source, not yet independently confirmed:
         "dc_input_watts":     h(14, 18),
         "ambient_color":      ambient_color,
         "ambient_lightness":  h(36, 38),
-        "sleep_mode":         sleep_mode,
         "switches":           switches,
         "temperature_c":      temperature_c,
         "remaining_output_minutes": remaining_output,
@@ -350,7 +379,8 @@ def parse_status_93_payload(data: str) -> dict:
         "four_g_switch_estimated": four_g_switch_estimated,
         # Compatibility aliases for existing dashboard JS field names:
         "electricity_pct":        h(0, 2),
-        "dc_output_12v_watts":    dc_output_watts,
+        "dc_output_12v_watts":    dc_12v_watts,
+        "dc_output_ports_watts":  dc_port_watts,
         "switch_status":          switches,
         "device_mode": {
             "amp_up": amp_up,
@@ -717,7 +747,19 @@ class PowerstationClient:
             if timeout <= 0:
                 return None
 
-            return self._read_frame(expected_cmds, timeout=timeout)
+            result = self._read_frame(expected_cmds, timeout=timeout)
+            if result is None:
+                # No matching response arrived at all. Confirmed from a
+                # real failure: after one command goes unanswered like
+                # this, the device stops responding to everything else
+                # on this same socket too (including the periodic '93'
+                # push) - it's abandoned the session on its end even
+                # though the TCP socket itself never got closed. Reusing
+                # it just produces a cascade of identical timeouts, so
+                # mark it dead here and let the next call open a fresh
+                # connection instead.
+                self.connected = False
+            return result
 
         except PowerstationError:
             raise
@@ -883,6 +925,12 @@ class PowerstationClient:
 
         raw = self._read_frame(expected_cmds={"93"}, timeout=timeout)
         if not raw:
+            # Same situation as send_command's timeout handling: the
+            # device has gone quiet on this socket, not just missed one
+            # push. Mark it dead so the bridge's next poll opens a
+            # genuinely fresh connection instead of hammering this one
+            # with the same timeout forever.
+            self.connected = False
             raise PowerstationError(f"No status push arrived within {timeout:.0f}s")
         frame = parse_response_frame(raw)
         if not frame:
@@ -970,29 +1018,44 @@ class PowerstationClient:
 
     # ---------- Multi-level settings ----------
 
-    def set_machine_standby_minutes(self, level: int):
-        """Auto power-off-when-idle timeout (command '64').
-        6=never, 5=12h, 4=6h, 3=2h, 2=1h, 1=shortest. Fire-and-forget:
-        no response is read back."""
-        if not 1 <= level <= 6:
-            raise ValueError("Standby level must be 1-6 (6 = never)")
-        self.send_command("64", format(level, '02X'), timeout=0)
+    def set_standby_levels(self, machine_level: int, screen_level: int):
+        """
+        Machine (whole-unit) and screen standby timeouts, sent together
+        in one command ('16') - both share a single byte:
+        '0' + 3-bit machine level + 3-bit screen level + '0'. Confirmed
+        from source (oldSetODeviceSettingMachineStandbyTimeFn /
+        oldDeviceSettingScreenStandbyTimeFn) - the newer-firmware-only
+        commands '64'/'66' don't work on this device, same pattern as
+        buzzer and charge speed.
 
-    def set_keep_powered_on(self, enabled: bool, off_level: int = 1):
-        """Convenience wrapper: True sets standby to "never" (level 6),
-        False restores a timeout (default: shortest)."""
-        self.set_machine_standby_minutes(6 if enabled else off_level)
+        Both values are required on every call, deliberately - there is
+        no local command that reads these back (the vendor app's own
+        local connection only ever sends 12/16/18/20/34/64/66/72,
+        nothing that requests a richer status), so a safe read-current-
+        value-then-modify-one-bit approach isn't possible here. Setting
+        one always overwrites the other; callers must supply both.
 
-    def set_screen_standby_minutes(self, level: int):
-        """Screen/display backlight standby timeout (command '66'),
-        separate from the whole-unit timeout above. Levels confirmed
-        from source: 1=10sec, 2=30sec, 3=1min, 4=5min, 5=30min, 6=never -
-        note these are NOT the same durations as machine standby above,
-        despite using the same 1-6 level encoding. Fire-and-forget: no
-        response is read back."""
-        if not 1 <= level <= 6:
-            raise ValueError("Standby level must be 1-6 (6 = never)")
-        self.send_command("66", format(level, '02X'), timeout=0)
+        machine_level: 1-6 (6=never, 5=12h, 4=6h, 3=2h, 2=1h, 1=shortest)
+        screen_level:  1-6 (6=never, 5=30min, 4=5min, 3=1min, 2=30sec, 1=10sec)
+        Fire-and-forget: no response is read back.
+        """
+        if not 1 <= machine_level <= 6:
+            raise ValueError("machine_level must be 1-6 (6 = never)")
+        if not 1 <= screen_level <= 6:
+            raise ValueError("screen_level must be 1-6 (6 = never)")
+        machine_bin = format(machine_level, '03b')
+        screen_bin = format(screen_level, '03b')
+        full_bin = "0" + machine_bin + screen_bin + "0"
+        hex_value = format(int(full_bin, 2), '02X')
+        self.send_command("16", hex_value, timeout=0)
+
+    def set_keep_powered_on(self, enabled: bool, screen_level: int, off_level: int = 1):
+        """Convenience wrapper over set_standby_levels: True sets
+        machine standby to "never" (level 6), False restores a timeout
+        (default: shortest). screen_level is required for the same
+        reason set_standby_levels requires both - it can't be read back
+        and would otherwise be silently overwritten."""
+        self.set_standby_levels(6 if enabled else off_level, screen_level)
 
     # Bit order for the legacy 8-bit switch bitmask, MSB to LSB -
     # verified by walking the status parser's bytecode directly.
@@ -1466,7 +1529,16 @@ def main():
                               "in source. Triggers the OTA indicator light. Unknown "
                               "real effect - could plausibly leave the unit in a bad state.")
     parser.add_argument("--screen-standby", type=int, metavar="LEVEL",
-                         help="Screen backlight standby level (command '66'), 1-6.")
+                         help="Screen backlight standby level, 1-6 (6=never). Sent via "
+                              "command '16' together with --machine-standby (or the current "
+                              "machine-standby default of 6/never if that flag isn't also "
+                              "given) - both settings share one byte and can't be read back, "
+                              "so setting one always overwrites the other.")
+    parser.add_argument("--machine-standby", type=int, metavar="LEVEL",
+                         help="Whole-unit auto power-off level, 1-6 (6=never). Sent via "
+                              "command '16' together with --screen-standby (or the current "
+                              "screen-standby default of 6/never if that flag isn't also "
+                              "given) - see --screen-standby for why both are needed.")
     parser.add_argument("--listen", type=float, metavar="SECONDS",
                          help="Connect and listen for SECONDS without sending anything, "
                               "including no status request.")
@@ -1646,9 +1718,20 @@ def main():
             else:
                 print("Cancelled.")
 
-        if args.screen_standby is not None:
-            print(f"\nSetting screen standby level to {args.screen_standby} (command '66')...")
-            client.set_screen_standby_minutes(args.screen_standby)
+        if args.screen_standby is not None or args.machine_standby is not None:
+            screen_level = args.screen_standby if args.screen_standby is not None else 6
+            machine_level = args.machine_standby if args.machine_standby is not None else 6
+            if args.screen_standby is None:
+                print(f"\nNote: --machine-standby was given without --screen-standby. "
+                      f"These share one byte and can't be read back, so screen standby "
+                      f"is being set to {screen_level} (never) as a side effect.")
+            if args.machine_standby is None:
+                print(f"\nNote: --screen-standby was given without --machine-standby. "
+                      f"These share one byte and can't be read back, so machine standby "
+                      f"is being set to {machine_level} (never) as a side effect.")
+            print(f"\nSetting machine standby={machine_level}, screen standby={screen_level} "
+                  f"(command '16')...")
+            client.set_standby_levels(machine_level, screen_level)
 
         if args.listen is not None:
             print(f"\nListening passively for {args.listen:.0f}s, sending nothing...")
