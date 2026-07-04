@@ -39,6 +39,16 @@ def get_client(host: str = None, port: int = None) -> PowerstationClient:
     """Return a connected client, (re)connecting if needed."""
     global _client
     if _client is None or not _client.connected:
+        if _client is not None:
+            # Close the old socket explicitly rather than just dropping
+            # the reference - otherwise its TCP connection can linger
+            # from the device's side even though we've stopped using it,
+            # which may be part of why a full WiFi reset was needed to
+            # recover in practice rather than just a bridge restart.
+            try:
+                _client.disconnect()
+            except Exception:
+                pass
         _client = PowerstationClient(host=host, port=port)
         _client.connect(timeout=5.0)
     return _client
@@ -184,7 +194,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
             "/api/sleep-mode": lambda c: c.set_sleep_mode(bool(body.get("on"))),
             "/api/amp-up": lambda c: c.set_amp_up_mode(bool(body.get("on"))),
             "/api/four-g": lambda c: c.set_four_g_switch(bool(body.get("on"))),
-            "/api/keep-powered-on": lambda c: c.set_keep_powered_on(bool(body.get("on"))),
             "/api/ac-hz": lambda c: c.set_ac_frequency(int(body.get("hz", 60))),
             "/api/led/brightness": lambda c: c.set_led_brightness(int(body.get("value", 50))),
             "/api/led/color": lambda c: c.set_led_color(int(body.get("id", 1))),
@@ -192,6 +201,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 int(body.get("id", 1)), int(body.get("brightness", 50))),
             "/api/charge-limit": lambda c: c.set_charge_limit(int(body.get("percent", 100))),
             "/api/charge-speed": lambda c: c.set_max_charge_watts(int(body.get("watts", 1800))),
+            # Machine and screen standby share one byte on this device
+            # and can't be read back (see set_standby_levels docstring),
+            # so both are required on every call - no silent default for
+            # the value the caller isn't trying to change.
+            "/api/standby-levels": lambda c: c.set_standby_levels(
+                int(body["machine"]), int(body["screen"])),
         }
 
         fn = routes.get(path)
