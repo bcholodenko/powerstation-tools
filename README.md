@@ -39,6 +39,8 @@ The bridge listens on `0.0.0.0:8090` with no authentication - keep it
 on a trusted network. Anyone who can reach that port can control the
 device.
 
+Turn the device on. Press the WiFi button to turn it on then off. Hold it until it beeps then join the device SSID.
+
 ## Standalone CLI
 
 ```
