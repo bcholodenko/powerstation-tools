@@ -1,3 +1,5 @@
+If you found this project useful, consider [<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="150">](https://buymeacoffee.com/bcholodenko)
+
 # powerstation-tools
 
 Local control for a WiFi-connected Vanpowers Power Station Pro 1500/2000 and Zendure SuperBase Pro 1500/2000 power stations, over
