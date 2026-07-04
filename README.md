@@ -66,7 +66,7 @@ commands found by probing that aren't confirmed safe.
 
 ## WiFi provisioning
 
-This is featrure is not yet functional and may depend on cloud connectivity.
+This is feature is not yet functional and may depend on cloud connectivity.
 
 
 ## Disclaimer
