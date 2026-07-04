@@ -1,4 +1,4 @@
-If you found this project useful, consider [<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="150">](https://buymeacoffee.com/bcholodenko)
+If you found this project useful and want to support it and future projects: [<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" width="150">](https://buymeacoffee.com/bcholodenko)
 
 # powerstation-tools
 
