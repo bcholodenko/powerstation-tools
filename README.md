@@ -3,7 +3,7 @@
 Local control for a WiFi-connected Vanpowers Power Station Pro 1500/2000 and Zendure SuperBase Pro 1500/2000 power stations, over
 its own TCP socket - no cloud account, no MQTT, no internet required.
 
-<img width="864" height="1221" alt="image" src="https://github.com/user-attachments/assets/8cff28e0-fac1-4402-9fad-740cf15cf67f" />
+<img width="885" height="1178" alt="image" src="https://github.com/user-attachments/assets/1630e9fb-fc61-4892-9272-ebc6f2102038" />
 
 ## Why
 
@@ -62,14 +62,7 @@ commands found by probing that aren't confirmed safe.
 
 ## WiFi provisioning
 
-Join the device to your home network:
-
-1. Connect your computer to the device's own WiFi hotspot.
-2. Run the `--wifi-ssid`/`--wifi-pass` command above, or use the WiFi
-   section of the dashboard.
-3. Reconnect to your normal network - the device will now be reachable
-   on your LAN. Use `--scan` (or the dashboard's subnet scan) to find
-   its new IP if needed.
+This is featrure is not yet functional and may depend on cloud connectivity.
 
 
 ## Disclaimer
