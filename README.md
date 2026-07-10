@@ -68,11 +68,16 @@ Run with `--help` for the full list, including a few experimental
 commands found by probing that aren't confirmed safe.
 
 ## iOS App
+<img width="128" height="128" alt="IMG_4772" src="https://github.com/user-attachments/assets/7d4bb78a-47d1-472d-9181-198aa7ab25a3" />
 
 A native SwiftUI iPhone app in [`ios-app/`](ios-app/), built directly
 on top of the same protocol - it's its own TCP client (via
 `Network.framework`), not a wrapper around the bridge server, so it
-works with nothing else running.
+works with nothing else running
+
+<img width="300" alt="IMG_4770" src="https://github.com/user-attachments/assets/d9ed1d52-84b0-4e16-bf97-00a19e98acf2" />
+
+<img width="300" alt="IMG_4769" src="https://github.com/user-attachments/assets/9074783d-3790-4a17-815d-f00de0c2d4e6" />
 
 **Status tab** - live battery, AC/DC input and output watts, and
 toggles for master/AC/DC/ambient light/beep/sleep/AmpUp.
