@@ -631,7 +631,7 @@ to attach them to the start of each source file to most effectively
 state the exclusion of warranty; and each file should have at least
 the "copyright" line and a pointer to where the full notice is found.
 
-    <one line to give the program's name and a brief idea of what it does.>
+    powerstation-tools is a local API, web interface, and iOS app for controlling Vanpowers Super Power Pro 1500/2000 and Zendure SuperBase Pro 1500/2000 power stations
     Copyright (C) 2026  Brandon Cholodenko
 
     This program is free software: you can redistribute it and/or modify
