@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Powerstation connects to your power station over your Wi-Fi network to read its status and send commands.</string>
+</dict>
+</plist>
