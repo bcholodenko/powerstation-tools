@@ -1221,7 +1221,16 @@ class PowerstationClient:
 
     def trigger_power_off(self):
         """Power off the unit (command '12', data '00'). Requires the
-        physical power button to turn back on."""
+        physical power button to turn back on.
+
+        Sends a raw all-zero byte, which clears every switch bit at
+        once - not just master, but buzzer/AC/DC/ambient light too,
+        regardless of their current state. Prefer set_master_switch(False)
+        instead: same effect on master power, but built on
+        toggle_switch_via_legacy_bitmask() so it only changes the master
+        bit and leaves the others as reported. Kept here for reference/
+        edge cases, not used by the CLI's --local-power-off flag.
+        """
         self.send_command("12", "00", timeout=2.0)
 
     def trigger_ota_light(self):
@@ -1530,15 +1539,15 @@ def main():
                               "real effect - could plausibly leave the unit in a bad state.")
     parser.add_argument("--screen-standby", type=int, metavar="LEVEL",
                          help="Screen backlight standby level, 1-6 (6=never). Sent via "
-                              "command '16' together with --machine-standby (or the current "
-                              "machine-standby default of 6/never if that flag isn't also "
-                              "given) - both settings share one byte and can't be read back, "
-                              "so setting one always overwrites the other.")
+                              "command '16' together with --machine-standby (or the "
+                              "documented factory default of 3/1-minute if that flag isn't "
+                              "also given) - both settings share one byte and can't be read "
+                              "back, so setting one always overwrites the other.")
     parser.add_argument("--machine-standby", type=int, metavar="LEVEL",
                          help="Whole-unit auto power-off level, 1-6 (6=never). Sent via "
-                              "command '16' together with --screen-standby (or the current "
-                              "screen-standby default of 6/never if that flag isn't also "
-                              "given) - see --screen-standby for why both are needed.")
+                              "command '16' together with --screen-standby (or the "
+                              "documented factory default of 2/1-hour if that flag isn't "
+                              "also given) - see --screen-standby for why both are needed.")
     parser.add_argument("--listen", type=float, metavar="SECONDS",
                          help="Connect and listen for SECONDS without sending anything, "
                               "including no status request.")
@@ -1702,7 +1711,13 @@ def main():
                              "Type 'yes' to proceed: ").strip().lower()
             if confirm == "yes":
                 print("Powering off...")
-                client.trigger_power_off()
+                # set_master_switch() reads current switch state and clears only
+                # the master bit, same as every other switch toggle - NOT
+                # trigger_power_off(), which sends a raw all-zero byte and clears
+                # every bit at once (buzzer, AC, DC, ambient light, all included),
+                # not just master. Same end result for master itself, but no
+                # collateral changes to switches nobody asked to touch.
+                client.set_master_switch(False)
             else:
                 print("Cancelled.")
 
@@ -1719,16 +1734,21 @@ def main():
                 print("Cancelled.")
 
         if args.screen_standby is not None or args.machine_standby is not None:
-            screen_level = args.screen_standby if args.screen_standby is not None else 6
-            machine_level = args.machine_standby if args.machine_standby is not None else 6
+            # Factory defaults confirmed from the SBP1500 manual (section 4.41/
+            # 4.42): display auto-off defaults to 1 minute (level 3), whole-unit
+            # standby defaults to 1 hour (level 2) - neither defaults to "never".
+            screen_level = args.screen_standby if args.screen_standby is not None else 3
+            machine_level = args.machine_standby if args.machine_standby is not None else 2
             if args.screen_standby is None:
                 print(f"\nNote: --machine-standby was given without --screen-standby. "
                       f"These share one byte and can't be read back, so screen standby "
-                      f"is being set to {screen_level} (never) as a side effect.")
+                      f"is being set to {screen_level} (the documented factory default, "
+                      f"1 minute) as a side effect.")
             if args.machine_standby is None:
                 print(f"\nNote: --screen-standby was given without --machine-standby. "
                       f"These share one byte and can't be read back, so machine standby "
-                      f"is being set to {machine_level} (never) as a side effect.")
+                      f"is being set to {machine_level} (the documented factory default, "
+                      f"1 hour) as a side effect.")
             print(f"\nSetting machine standby={machine_level}, screen standby={screen_level} "
                   f"(command '16')...")
             client.set_standby_levels(machine_level, screen_level)
